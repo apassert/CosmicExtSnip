@@ -1,12 +1,22 @@
 //! On Wayland the process that copies owns the clipboard, and the content
-//! vanishes when it exits. The editor re-executes itself with
-//! `--serve-clipboard <png>`, detached, to keep serving after the window closes.
+//! vanishes when it exits. So the process that copied keeps serving after its
+//! window has closed: the editor hands the PNG over and exits its window, and
+//! `main` serves it until another client takes the clipboard.
+//!
+//! It used to re-execute itself as a detached helper. Inside a Flatpak sandbox
+//! that helper dies with the sandbox, which ends when its main process does,
+//! and the copy would be lost the moment the window closed.
 
-use std::os::unix::process::CommandExt;
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use wl_clipboard_rs::copy::{MimeType, Options, Source};
+
+/// Where the editor leaves the PNG it copied, for `main` to serve.
+pub type Handoff = Arc<Mutex<Option<Vec<u8>>>>;
+
+pub fn handoff() -> Handoff {
+    Arc::new(Mutex::new(None))
+}
 
 /// Serves `png` as `image/png` until another client takes the clipboard.
 pub fn serve(png: Vec<u8>) -> Result<(), String> {
@@ -18,26 +28,4 @@ pub fn serve(png: Vec<u8>) -> Result<(), String> {
             MimeType::Specific("image/png".into()),
         )
         .map_err(|e| format!("cannot set the clipboard: {e}"))
-}
-
-/// Writes `png` to a temporary file and starts a detached server for it.
-pub fn spawn_server(png: &[u8]) -> Result<(), String> {
-    let dir = std::env::temp_dir();
-    let path = dir.join(format!("cosmic-ext-snip-clip-{}.png", std::process::id()));
-    std::fs::write(&path, png).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
-    spawn_for(&path)
-}
-
-fn spawn_for(path: &Path) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("cannot find own executable: {e}"))?;
-    Command::new(exe)
-        .arg("--serve-clipboard")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("cannot start the clipboard server: {e}"))
 }

@@ -2,9 +2,7 @@
 //! returned the snip. It owns no layer-shell surface, so closing it is an
 //! ordinary window close.
 
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 use cosmic::app::{Core, Task};
 use cosmic::iced::keyboard::{self, Key, key::Named};
@@ -26,6 +24,8 @@ pub const APP_ID: &str = "io.github.apassert.cosmic-ext-snip";
 
 pub struct Flags {
     pub snip: Pixmap,
+    /// Where a copy is left for `main` to serve after the window closes.
+    pub handoff: clipboard::Handoff,
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +39,8 @@ pub enum Message {
     Save,
     Saved(Result<Option<PathBuf>, String>),
     New,
+    /// A new snip from the portal: Ok(None) when the selection was cancelled.
+    Captured(Result<Option<Pixmap>, String>),
     Exit,
     Begin(Point),
     Extend(Point),
@@ -49,6 +51,7 @@ pub enum Message {
 pub struct App {
     core: Core,
     snip: Pixmap,
+    handoff: clipboard::Handoff,
     handle: Handle,
     doc: Document,
     tool: Tool,
@@ -98,8 +101,13 @@ impl App {
     }
 
     fn copy_and_exit(&mut self) -> Task<Message> {
-        match self.export().and_then(|png| clipboard::spawn_server(&png)) {
-            Ok(()) => cosmic::iced::exit(),
+        match self.export() {
+            Ok(png) => {
+                if let Ok(mut slot) = self.handoff.lock() {
+                    *slot = Some(png);
+                }
+                cosmic::iced::exit()
+            }
             Err(e) => {
                 log::error!("{e}");
                 self.error = Some(e);
@@ -169,21 +177,47 @@ impl App {
         Task::none()
     }
 
+    /// Ctrl+N: a new snip in this window. The window steps aside so it is not
+    /// in the picture, the portal takes the selection, and the editor comes
+    /// back with the new snip - or the old one, if the selection was cancelled.
+    /// Done in-process: a second process would not outlive a Flatpak sandbox.
     fn update_new(&mut self) -> Task<Message> {
-        if let Ok(exe) = std::env::current_exe() {
-            let spawned = Command::new(exe)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .process_group(0)
-                .spawn();
-            if let Err(e) = spawned {
-                log::error!("cannot start a new snip: {e}");
-                return Task::none();
-            }
-        }
-        cosmic::iced::exit()
+        let hide = match self.core.main_window_id() {
+            Some(id) => cosmic::iced::window::minimize(id, true),
+            None => Task::none(),
+        };
+        let capture = cosmic::task::future(async {
+            // Long enough for the window to be gone before the screen is taken.
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            Message::Captured(crate::capture::request().await)
+        });
+        hide.chain(capture)
     }
+
+    fn show(&self) -> Task<Message> {
+        match self.core.main_window_id() {
+            Some(id) => cosmic::iced::window::minimize::<cosmic::Action<Message>>(id, false)
+                .chain(cosmic::iced::window::gain_focus(id)),
+            None => Task::none(),
+        }
+    }
+
+    fn set_snip(&mut self, snip: Pixmap) {
+        self.handle = handle_for(&snip);
+        self.snip = snip;
+        self.doc = Document::default();
+        self.error = None;
+    }
+}
+
+/// The on-screen image: straight RGBA, as the snip's pixels are premultiplied.
+fn handle_for(snip: &Pixmap) -> Handle {
+    let mut rgba = Vec::with_capacity(snip.data().len());
+    for p in snip.pixels() {
+        let c = p.demultiply();
+        rgba.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+    }
+    Handle::from_rgba(snip.width(), snip.height(), rgba)
 }
 
 impl cosmic::Application for App {
@@ -202,16 +236,12 @@ impl cosmic::Application for App {
 
     fn init(core: Core, flags: Flags) -> (Self, Task<Message>) {
         let snip = flags.snip;
-        let mut rgba = Vec::with_capacity(snip.data().len());
-        for p in snip.pixels() {
-            let c = p.demultiply();
-            rgba.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
-        }
-        let handle = Handle::from_rgba(snip.width(), snip.height(), rgba);
+        let handle = handle_for(&snip);
         let prefs = Prefs::load();
         let app = App {
             core,
             snip,
+            handoff: flags.handoff,
             handle,
             doc: Document::default(),
             tool: Tool::Pen,
@@ -266,6 +296,17 @@ impl cosmic::Application for App {
                 }
             }
             Message::New => return self.update_new(),
+            Message::Captured(result) => {
+                match result {
+                    Ok(Some(snip)) => self.set_snip(snip),
+                    Ok(None) => {}
+                    Err(e) => {
+                        log::error!("{e}");
+                        self.error = Some(e);
+                    }
+                }
+                return self.show();
+            }
             Message::Exit => return cosmic::iced::exit(),
             Message::Begin(at) => {
                 let rgba = config::PALETTE[self.color].rgba;

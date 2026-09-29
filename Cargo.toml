@@ -14,7 +14,7 @@ jiff = "0.2"
 log = "0.4"
 env_logger = "0.11"
 tiny-skia = "0.11"
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time"] }
 wl-clipboard-rs = "0.9"
 
 # The revision cosmic-files builds against on this machine; the lock file was
