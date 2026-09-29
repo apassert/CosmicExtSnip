@@ -136,7 +136,7 @@ Do not open public issues for security reports. Use private reporting as documen
 | Capture | XDG Desktop Portal `Screenshot` via `ashpd`, as in cosmic-screenshot |
 | UI | libcosmic (iced) |
 | Export | `tiny-skia`, at the snip's native resolution |
-| Clipboard | `wl-clipboard-rs`, served by the app's own process after its window closes |
+| Clipboard | `wl-clipboard-rs` on the host; the window's own clipboard in a Flatpak (see ARCHITECTURE.md) |
 | Language | Rust |
 
 ---

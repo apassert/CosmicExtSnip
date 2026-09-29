@@ -51,11 +51,20 @@ at the snip's own resolution, so HiDPI captures keep every pixel.
 
 ## The clipboard
 
-On Wayland the process that sets the clipboard must answer every paste. The
-editor leaves the PNG in a hand-off slot and closes its window; `main` then
-serves it from the same process until another client takes the clipboard.
+On Wayland the process that sets the clipboard must answer every paste, so a
+copy lives exactly as long as the process that made it. How it is kept alive
+depends on where the app runs:
 
-It used to re-execute itself as a detached helper. A Flatpak sandbox ends when
-its main process exits, so that helper - and the copy - would die with the
-window. For the same reason Ctrl+N takes a new snip inside the running app
-instead of starting a second process.
+- **Installed on the host:** the editor leaves the PNG in a hand-off slot and
+  the app ends; `main` then serves it with `wl-clipboard-rs` (the data-control
+  protocol) until another client takes the clipboard.
+- **In a Flatpak sandbox:** COSMIC hides the data-control protocols from
+  sandboxed clients, so the only clipboard is the window's own. Ctrl+C writes
+  `image/png` through the window, closes the window and keeps the process
+  running. A `clipboard:///` answer from the portal is read the same way, once
+  the editor window has focus.
+
+The app starts with no window - the snip is taken first, so the editor is
+never in its own picture - and it is a single instance: launching it again,
+like Ctrl+N, takes a new snip in the running process. That is what lets a
+sandboxed copy survive: there is only ever one process, and it is still there.
