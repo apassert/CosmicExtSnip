@@ -1,9 +1,10 @@
 # Architecture
 
-CosmicSnip 2 is cosmic-screenshot with an annotation editor after it.
+Snip for COSMIC™ (`cosmic-ext-snip`, formerly CosmicSnip) is cosmic-screenshot
+with an annotation editor after it.
 
 ```
-cosmicsnip
+cosmic-ext-snip
   │
   ├─ capture::request()        XDG Desktop Portal Screenshot
   │     interactive + modal    xdg-desktop-portal-cosmic draws the selection
@@ -17,9 +18,10 @@ cosmicsnip
   │     keys                   P H A R, + -, Ctrl+Z/C/S/N/Q, Esc
   │
   └─ finish
-        Copy  → render::composite → PNG → clipboard::spawn_server → exit
+        Copy  → render::composite → PNG → hand-off → window closes → main serves it
         Save  → portal file chooser → render::composite → write → exit
         Esc   → exit
+        Ctrl+N → window minimised → portal again → same window, new snip
 ```
 
 ## Why the portal draws the selection
@@ -49,8 +51,20 @@ at the snip's own resolution, so HiDPI captures keep every pixel.
 
 ## The clipboard
 
-On Wayland the process that sets the clipboard must answer every paste. The
-editor therefore writes the PNG to a temporary file and starts
-`cosmicsnip --serve-clipboard <file>` in its own process group. That process
-reads and deletes the file, serves `image/png` until another client takes the
-clipboard, then exits. Copying twice leaves one server.
+On Wayland the process that sets the clipboard must answer every paste, so a
+copy lives exactly as long as the process that made it. How it is kept alive
+depends on where the app runs:
+
+- **Installed on the host:** the editor leaves the PNG in a hand-off slot and
+  the app ends; `main` then serves it with `wl-clipboard-rs` (the data-control
+  protocol) until another client takes the clipboard.
+- **In a Flatpak sandbox:** COSMIC hides the data-control protocols from
+  sandboxed clients, so the only clipboard is the window's own. Ctrl+C writes
+  `image/png` through the window, closes the window and keeps the process
+  running. A `clipboard:///` answer from the portal is read the same way, once
+  the editor window has focus.
+
+The app starts with no window - the snip is taken first, so the editor is
+never in its own picture - and it is a single instance: launching it again,
+like Ctrl+N, takes a new snip in the running process. That is what lets a
+sandboxed copy survive: there is only ever one process, and it is still there.

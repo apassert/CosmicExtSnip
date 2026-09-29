@@ -1,12 +1,12 @@
-# Contributing to CosmicSnip
+# Contributing to Snip for COSMIC™
 
-Thanks for helping improve CosmicSnip.
+Thanks for helping improve Snip for COSMIC™ (`cosmic-ext-snip`).
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/itssoup/cosmicsnip.git
-cd cosmicsnip
+git clone https://github.com/apassert/cosmic-ext-snip.git
+cd cosmic-ext-snip
 ```
 
 Install the libraries libcosmic links against (Pop!_OS / Ubuntu), then build
@@ -53,12 +53,12 @@ Use Conventional Commits where possible:
 assertions), portal URI handling and the fit transform. The portal and the
 window need a real session, so also smoke-test on COSMIC Wayland:
 
-1. Launch `cosmicsnip` from the launcher or a shortcut.
+1. Launch `cosmic-ext-snip` from the launcher or a shortcut.
 2. Drag-select on single and multi-monitor layouts.
 3. Confirm editor tools draw correctly (pen/highlighter/arrow/rect).
 4. Verify copy (`Ctrl+C`) and save (`Ctrl+S`) flows.
 5. Verify `Esc` in the portal and in the editor exits cleanly, and `Ctrl+N`.
-6. Paste after CosmicSnip has exited: the copy must still be there.
+6. Paste after the window has closed: the copy must still be there.
 
 ## Security Reports
 

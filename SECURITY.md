@@ -7,8 +7,8 @@ Security is treated as a core feature, not a best-effort add-on.
 
 | Version | Supported |
 |---------|-----------|
-| 1.0.x | Yes |
-| < 1.0.0 | No |
+| 2.x | Yes |
+| < 2.0 (the Python CosmicSnip) | No |
 
 Supported means security patches and critical bug fixes.
 
@@ -16,27 +16,23 @@ Supported means security patches and critical bug fixes.
 
 Please do **not** open public issues for security bugs.
 
-Preferred:
-1. GitHub repository Security tab -> **Report a vulnerability** (private advisory)
-
-Fallback:
-1. Email maintainer: `itssoup@users.noreply.github.com`
-2. Subject: `CosmicSnip security report`
-3. Include reproduction steps, affected version/commit, impact, and logs if relevant
+Use the GitHub repository's Security tab -> **Report a vulnerability**
+(a private advisory). Include reproduction steps, the affected version or
+commit, the impact, and logs if relevant.
 
 ## Disclosure Process
 
-1. We acknowledge reports within 72 hours.
-2. We triage and reproduce within 7 days when possible.
-3. We coordinate a fix and release before public disclosure.
-4. We credit reporters (if desired) in release notes.
+This is a one-maintainer project; reports are handled on a best-effort basis.
+
+1. A fix is coordinated and released before public disclosure.
+2. Reporters are credited in the release notes, if they wish.
 
 ## Security Boundaries and Threat Model
 
-CosmicSnip is a local desktop app for COSMIC on Wayland.
+Snip for COSMIC™ (`cosmic-ext-snip`) is a local desktop app for the COSMIC™ desktop on Wayland.
 
 Primary trust boundaries:
-- File system paths (temp captures, save destinations, config files)
+- File system paths (portal captures, save destinations, the editor's settings file)
 - Capture pipeline (`cosmic-screenshot` portal output)
 - Clipboard output (`image/png`)
 - Session DBus tray interface

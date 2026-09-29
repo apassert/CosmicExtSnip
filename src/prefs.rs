@@ -71,7 +71,7 @@ impl Prefs {
     }
 
     pub fn path() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("cosmicsnip").join("editor.conf"))
+        dirs::config_dir().map(|d| d.join("cosmic-ext-snip").join("editor.conf"))
     }
 
     pub fn load() -> Prefs {

@@ -1,8 +1,8 @@
 # Install the way cosmic-screenshot does: `just install` into ~/.local,
 # `sudo just prefix=/usr install` system-wide.
 
-name := 'cosmicsnip'
-appid := 'io.github.itssoup.CosmicSnip'
+name := 'cosmic-ext-snip'
+appid := 'io.github.apassert.cosmic-ext-snip'
 prefix := env('HOME') / '.local'
 
 bin-dst := prefix / 'bin' / name

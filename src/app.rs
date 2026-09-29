@@ -1,17 +1,22 @@
 //! The editor: a plain libcosmic toplevel window that opens after the portal
 //! returned the snip. It owns no layer-shell surface, so closing it is an
 //! ordinary window close.
+//!
+//! The app starts with no window at all: the snip is taken first, so the editor
+//! can never be in its own picture, and the window opens on the result. It runs
+//! as a single instance - launching it again takes a new snip in the running
+//! process - because in a Flatpak sandbox a copy is held by this process's own
+//! window clipboard and must outlive the window (see sandbox.rs).
 
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 use cosmic::app::{Core, Task};
 use cosmic::iced::keyboard::{self, Key, key::Named};
 use cosmic::iced::widget::image::Handle;
 use cosmic::iced::widget::stack;
 use cosmic::iced::{
-    Background, Border, Color, ContentFit, Length, Point as IPoint, Rectangle, Subscription, mouse,
+    Background, Border, Color, ContentFit, Length, Point as IPoint, Rectangle, Size, Subscription,
+    mouse, window,
 };
 use cosmic::widget::canvas::{self, Frame, Geometry, Path, Program, Stroke as IStroke};
 use cosmic::widget::{self, button, container};
@@ -19,13 +24,20 @@ use cosmic::{Element, Renderer, Theme};
 use tiny_skia::Pixmap;
 
 use crate::annotation::{Document, Point, Shape, Stroke, Tool, arrow_barbs};
+use crate::capture::Grab;
 use crate::prefs::Prefs;
 use crate::{clipboard, config, render};
 
-pub const APP_ID: &str = "io.github.itssoup.CosmicSnip";
+pub const APP_ID: &str = "io.github.apassert.cosmic-ext-snip";
 
 pub struct Flags {
-    pub snip: Pixmap,
+    /// Where a copy is left for `main` to serve after the app exits (outside a sandbox).
+    pub handoff: clipboard::Handoff,
+}
+
+impl cosmic::app::CosmicFlags for Flags {
+    type SubCommand = String;
+    type Args = Vec<String>;
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +51,11 @@ pub enum Message {
     Save,
     Saved(Result<Option<PathBuf>, String>),
     New,
+    /// A new snip from the portal: Ok(None) when the selection was cancelled.
+    Captured(Result<Option<Grab>, String>),
+    /// The portal's copy, read through our window; the attempt number.
+    ClipboardImage(Option<clipboard::Png>, u8),
+    CloseWindow,
     Exit,
     Begin(Point),
     Extend(Point),
@@ -49,6 +66,11 @@ pub enum Message {
 pub struct App {
     core: Core,
     snip: Pixmap,
+    handoff: clipboard::Handoff,
+    /// A portal selection is on screen; a second one is not started.
+    capturing: bool,
+    /// A sandboxed copy is being held by this process's window clipboard.
+    holding_copy: bool,
     handle: Handle,
     doc: Document,
     tool: Tool,
@@ -98,14 +120,26 @@ impl App {
     }
 
     fn copy_and_exit(&mut self) -> Task<Message> {
-        match self.export().and_then(|png| clipboard::spawn_server(&png)) {
-            Ok(()) => cosmic::iced::exit(),
+        let png = match self.export() {
+            Ok(png) => png,
             Err(e) => {
                 log::error!("{e}");
                 self.error = Some(e);
-                Task::none()
+                return Task::none();
             }
+        };
+        if crate::sandbox::sandboxed() {
+            // Through our own window, the only clipboard a sandbox has; then
+            // the window goes and the process stays, holding the copy.
+            self.holding_copy = true;
+            let write =
+                cosmic::iced::clipboard::write_data::<cosmic::Action<Message>>(clipboard::Png(png));
+            return write.chain(self.close_window());
         }
+        if let Ok(mut slot) = self.handoff.lock() {
+            *slot = Some(png);
+        }
+        cosmic::iced::exit()
     }
 
     fn save(&self) -> Task<Message> {
@@ -136,7 +170,7 @@ impl App {
             return Task::none();
         };
         if let Key::Named(Named::Escape) = key {
-            return cosmic::iced::exit();
+            return self.close_window();
         }
         let Key::Character(c) = key else {
             return Task::none();
@@ -152,7 +186,7 @@ impl App {
                     self.doc.undo();
                     Task::none()
                 }
-                'n' => self.update_new(),
+                'n' => self.start_capture(),
                 'q' => cosmic::iced::exit(),
                 _ => Task::none(),
             };
@@ -169,21 +203,93 @@ impl App {
         Task::none()
     }
 
-    fn update_new(&mut self) -> Task<Message> {
-        if let Ok(exe) = std::env::current_exe() {
-            let spawned = Command::new(exe)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .process_group(0)
-                .spawn();
-            if let Err(e) = spawned {
-                log::error!("cannot start a new snip: {e}");
-                return Task::none();
-            }
+    /// A new snip: at start, on Ctrl+N, and when the app is launched again. An
+    /// open editor steps aside first so it is not in the picture.
+    fn start_capture(&mut self) -> Task<Message> {
+        if self.capturing {
+            return Task::none();
         }
-        cosmic::iced::exit()
+        self.capturing = true;
+        let open = self.core.main_window_id();
+        let hide = match open {
+            Some(id) => window::minimize(id, true),
+            None => Task::none(),
+        };
+        let capture = cosmic::task::future(async move {
+            if open.is_some() {
+                // Long enough for the window to be gone before the screen is taken.
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            }
+            Message::Captured(crate::capture::request().await)
+        });
+        hide.chain(capture)
     }
+
+    /// Opens the editor window for the current snip, or brings the open one back.
+    fn ensure_window(&mut self) -> Task<Message> {
+        if let Some(id) = self.core.main_window_id() {
+            return window::minimize::<cosmic::Action<Message>>(id, false)
+                .chain(window::gain_focus(id));
+        }
+        let mut settings = window::Settings {
+            size: Size::new(
+                (self.snip.width() as f32).clamp(560.0, 1600.0),
+                (self.snip.height() as f32 + 56.0).clamp(360.0, 1000.0),
+            ),
+            min_size: Some(Size::new(560.0, 360.0)),
+            resizable: true,
+            decorations: false,
+            transparent: true,
+            exit_on_close_request: false,
+            ..Default::default()
+        };
+        settings.platform_specific.application_id = APP_ID.to_string();
+        let (id, opened) = window::open(settings);
+        self.core.set_main_window_id(Some(id));
+        opened.discard()
+    }
+
+    /// Esc, the close button and a finished save. The process ends with the
+    /// window unless it holds a sandboxed copy, which would end with it.
+    fn close_window(&mut self) -> Task<Message> {
+        if !self.holding_copy {
+            return cosmic::iced::exit();
+        }
+        match self.core.set_main_window_id(None) {
+            Some(id) => window::close(id),
+            None => Task::none(),
+        }
+    }
+
+    /// The portal left the snip on the clipboard and a sandbox can read it only
+    /// through a focused window of its own: read it once the editor is up.
+    fn read_clipboard_image(attempt: u8) -> Task<Message> {
+        cosmic::iced::Task::future(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        })
+        .discard()
+        .chain(
+            cosmic::iced::clipboard::read_data::<clipboard::Png>()
+                .map(move |png| cosmic::Action::App(Message::ClipboardImage(png, attempt))),
+        )
+    }
+
+    fn set_snip(&mut self, snip: Pixmap) {
+        self.handle = handle_for(&snip);
+        self.snip = snip;
+        self.doc = Document::default();
+        self.error = None;
+    }
+}
+
+/// The on-screen image: straight RGBA, as the snip's pixels are premultiplied.
+fn handle_for(snip: &Pixmap) -> Handle {
+    let mut rgba = Vec::with_capacity(snip.data().len());
+    for p in snip.pixels() {
+        let c = p.demultiply();
+        rgba.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+    }
+    Handle::from_rgba(snip.width(), snip.height(), rgba)
 }
 
 impl cosmic::Application for App {
@@ -201,17 +307,16 @@ impl cosmic::Application for App {
     }
 
     fn init(core: Core, flags: Flags) -> (Self, Task<Message>) {
-        let snip = flags.snip;
-        let mut rgba = Vec::with_capacity(snip.data().len());
-        for p in snip.pixels() {
-            let c = p.demultiply();
-            rgba.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
-        }
-        let handle = Handle::from_rgba(snip.width(), snip.height(), rgba);
+        // Nothing to show until the portal answers; the window opens on the snip.
+        let snip = Pixmap::new(1, 1).expect("a 1x1 pixmap");
+        let handle = handle_for(&snip);
         let prefs = Prefs::load();
-        let app = App {
+        let mut app = App {
             core,
             snip,
+            handoff: flags.handoff,
+            capturing: false,
+            holding_copy: false,
             handle,
             doc: Document::default(),
             tool: Tool::Pen,
@@ -220,11 +325,21 @@ impl cosmic::Application for App {
             highlight_width: prefs.highlight_width,
             error: None,
         };
-        (app, Task::none())
+        let first = app.start_capture();
+        (app, first)
+    }
+
+    fn dbus_activation(&mut self, _msg: cosmic::dbus_activation::Message) -> Task<Message> {
+        // Launched again while running: that is a request for a new snip.
+        self.start_capture()
+    }
+
+    fn on_close_requested(&self, _id: window::Id) -> Option<Message> {
+        Some(Message::CloseWindow)
     }
 
     fn on_escape(&mut self) -> Task<Message> {
-        cosmic::iced::exit()
+        self.close_window()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -258,14 +373,55 @@ impl cosmic::Application for App {
                     std::fs::write(&path, png)
                         .map_err(|e| format!("cannot write {}: {e}", path.display()))
                 }) {
-                    Ok(()) => return cosmic::iced::exit(),
+                    Ok(()) => return self.close_window(),
                     Err(e) => {
                         log::error!("{e}");
                         self.error = Some(e);
                     }
                 }
             }
-            Message::New => return self.update_new(),
+            Message::New => return self.start_capture(),
+            Message::Captured(result) => {
+                self.capturing = false;
+                let open = self.core.main_window_id().is_some();
+                match result {
+                    Ok(Some(Grab::Image(snip))) => {
+                        self.set_snip(snip);
+                        return self.ensure_window();
+                    }
+                    Ok(Some(Grab::OnClipboard)) => {
+                        let window = self.ensure_window();
+                        return window.chain(Self::read_clipboard_image(1));
+                    }
+                    Ok(None) if open => return self.ensure_window(),
+                    Ok(None) => return self.close_window(),
+                    Err(e) => {
+                        log::error!("{e}");
+                        self.error = Some(e);
+                        if !open && !self.holding_copy {
+                            return cosmic::iced::exit();
+                        }
+                        return if open {
+                            self.ensure_window()
+                        } else {
+                            Task::none()
+                        };
+                    }
+                }
+            }
+            Message::ClipboardImage(Some(png), _) => match crate::render::decode_png(&png.0) {
+                Ok(snip) => self.set_snip(snip),
+                Err(e) => self.error = Some(format!("the copied snip cannot be read: {e}")),
+            },
+            // The window may not have the keyboard yet; the clipboard is only
+            // offered to a focused client. A few tries, then say so.
+            Message::ClipboardImage(None, attempt) if attempt < 10 => {
+                return Self::read_clipboard_image(attempt + 1);
+            }
+            Message::ClipboardImage(None, _) => {
+                self.error = Some("the snip was copied, but it could not be read back; take it with Enter instead".into());
+            }
+            Message::CloseWindow => return self.close_window(),
             Message::Exit => return cosmic::iced::exit(),
             Message::Begin(at) => {
                 let rgba = config::PALETTE[self.color].rgba;
