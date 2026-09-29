@@ -1,10 +1,10 @@
 [package]
-name = "cosmicsnip"
+name = "cosmic-ext-snip"
 version = "2.0.0"
 edition = "2024"
 license = "MIT"
 description = "Snip a region of the COSMIC desktop through the screenshot portal, then annotate it"
-repository = "https://github.com/apassert/cosmicsnip"
+repository = "https://github.com/apassert/cosmic-ext-snip"
 rust-version = "1.85"
 
 [dependencies]

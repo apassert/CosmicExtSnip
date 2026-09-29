@@ -22,7 +22,7 @@ use crate::annotation::{Document, Point, Shape, Stroke, Tool, arrow_barbs};
 use crate::prefs::Prefs;
 use crate::{clipboard, config, render};
 
-pub const APP_ID: &str = "io.github.itssoup.CosmicSnip";
+pub const APP_ID: &str = "io.github.apassert.cosmic-ext-snip";
 
 pub struct Flags {
     pub snip: Pixmap,

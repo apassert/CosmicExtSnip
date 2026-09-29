@@ -1,12 +1,12 @@
-//! `cosmicsnip`: select a region with the COSMIC screenshot portal, then
+//! `cosmic-ext-snip`: select a region with the COSMIC screenshot portal, then
 //! annotate it, copy it or save it.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
-use cosmicsnip::app::{App, Flags};
-use cosmicsnip::{capture, clipboard};
+use cosmic_ext_snip::app::{App, Flags};
+use cosmic_ext_snip::{capture, clipboard};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Snip a region of the screen and annotate it")]
@@ -25,7 +25,7 @@ fn main() -> ExitCode {
         let png = match std::fs::read(&path) {
             Ok(png) => png,
             Err(e) => {
-                eprintln!("cosmicsnip: cannot read {}: {e}", path.display());
+                eprintln!("cosmic-ext-snip: cannot read {}: {e}", path.display());
                 return ExitCode::FAILURE;
             }
         };
@@ -33,7 +33,7 @@ fn main() -> ExitCode {
         return match clipboard::serve(png) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("cosmicsnip: {e}");
+                eprintln!("cosmic-ext-snip: {e}");
                 ExitCode::FAILURE
             }
         };
@@ -51,7 +51,7 @@ fn main() -> ExitCode {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("cosmicsnip: cannot start the async runtime: {e}");
+            eprintln!("cosmic-ext-snip: cannot start the async runtime: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -59,7 +59,7 @@ fn main() -> ExitCode {
         Ok(Some(snip)) => snip,
         Ok(None) => return ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("cosmicsnip: {e}");
+            eprintln!("cosmic-ext-snip: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -72,7 +72,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("cosmicsnip: {e}");
+            eprintln!("cosmic-ext-snip: {e}");
             ExitCode::FAILURE
         }
     }

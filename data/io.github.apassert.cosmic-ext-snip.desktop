@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Snip for COSMIC™
+GenericName=Screenshot Tool
+Comment=Snip a region of the screen and annotate it
+Exec=cosmic-ext-snip
+TryExec=cosmic-ext-snip
+Icon=io.github.apassert.cosmic-ext-snip
+Terminal=false
+Type=Application
+Categories=Graphics;
+Keywords=screenshot;snip;snipping tool;capture;annotate;clip;cosmic;
+StartupNotify=true

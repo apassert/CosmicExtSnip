@@ -1,4 +1,4 @@
-//! CosmicSnip: snip a region through the COSMIC screenshot portal, then
+//! Snip for COSMIC™ (cosmic-ext-snip): snip a region through the COSMIC screenshot portal, then
 //! annotate it. The pure parts - the annotation model and the renderer - live
 //! here so they are tested without a display.
 

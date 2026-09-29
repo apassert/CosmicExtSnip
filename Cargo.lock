@@ -1020,6 +1020,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cosmic-ext-snip"
+version = "2.0.0"
+dependencies = [
+ "clap",
+ "dirs",
+ "env_logger",
+ "jiff",
+ "libcosmic",
+ "log",
+ "tiny-skia 0.11.4",
+ "tokio",
+ "wl-clipboard-rs",
+]
+
+[[package]]
 name = "cosmic-freedesktop-icons"
 version = "0.4.0"
 source = "git+https://github.com/pop-os/freedesktop-icons#ab4c57b8e416c6af9297cb04d101889896fd9a92"
@@ -1095,21 +1110,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "cosmicsnip"
-version = "2.0.0"
-dependencies = [
- "clap",
- "dirs",
- "env_logger",
- "jiff",
- "libcosmic",
- "log",
- "tiny-skia 0.11.4",
- "tokio",
- "wl-clipboard-rs",
 ]
 
 [[package]]

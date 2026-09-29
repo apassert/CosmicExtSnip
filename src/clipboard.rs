@@ -23,7 +23,7 @@ pub fn serve(png: Vec<u8>) -> Result<(), String> {
 /// Writes `png` to a temporary file and starts a detached server for it.
 pub fn spawn_server(png: &[u8]) -> Result<(), String> {
     let dir = std::env::temp_dir();
-    let path = dir.join(format!("cosmicsnip-clip-{}.png", std::process::id()));
+    let path = dir.join(format!("cosmic-ext-snip-clip-{}.png", std::process::id()));
     std::fs::write(&path, png).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     spawn_for(&path)
 }

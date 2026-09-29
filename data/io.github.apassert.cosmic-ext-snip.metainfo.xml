@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.apassert.cosmic-ext-snip</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Snip for COSMIC™</name>
+  <summary>Snip a region of the screen and annotate it</summary>
+  <developer id="io.github.apassert">
+    <name>apassert</name>
+  </developer>
+  <description>
+    <p>
+      Select any region of the screen - on one monitor or across several - then
+      mark it up and copy or save it. Made for the COSMIC™ desktop; it is not
+      an official COSMIC application.
+    </p>
+    <p>
+      The selection is drawn by the desktop's own screenshot portal, the same
+      one the system screenshot tool uses. The editor adds:
+    </p>
+    <ul>
+      <li>Pen, highlighter, arrow and rectangle tools</li>
+      <li>Six colours and adjustable stroke widths, remembered for the next snip</li>
+      <li>Undo, and keyboard shortcuts for every tool</li>
+      <li>Copy to the clipboard at full resolution, or save as PNG</li>
+    </ul>
+    <p>
+      Based on CosmicSnip by itssoup, rewritten in Rust on libcosmic.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.apassert.cosmic-ext-snip.desktop</launchable>
+  <provides>
+    <binary>cosmic-ext-snip</binary>
+  </provides>
+  <url type="homepage">https://github.com/apassert/cosmic-ext-snip</url>
+  <url type="bugtracker">https://github.com/apassert/cosmic-ext-snip/issues</url>
+  <url type="vcs-browser">https://github.com/apassert/cosmic-ext-snip</url>
+  <branding>
+    <color type="primary" scheme_preference="light">#64c0c3</color>
+    <color type="primary" scheme_preference="dark">#272362</color>
+  </branding>
+  <keywords>
+    <keyword>screenshot</keyword>
+    <keyword>snip</keyword>
+    <keyword>snipping tool</keyword>
+    <keyword>annotate</keyword>
+    <keyword>capture</keyword>
+    <keyword>cosmic</keyword>
+  </keywords>
+  <categories>
+    <category>Graphics</category>
+  </categories>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <recommends>
+    <display_length compare="ge">768</display_length>
+  </recommends>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="2.0.0" date="2026-09-29">
+      <description>
+        <p>Rewritten in Rust on libcosmic, under a new name and application ID.</p>
+        <ul>
+          <li>The desktop's screenshot portal draws the selection, so a snip can span monitors</li>
+          <li>Escape closes the editor cleanly</li>
+          <li>A copy stays on the clipboard after the editor has closed</li>
+          <li>The colour and stroke widths are remembered between snips</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.0.4" date="2026-03-22">
+      <description>
+        <p>The last release of the original Python CosmicSnip.</p>
+      </description>
+    </release>
+    <release version="1.0.0" date="2026-03-16">
+      <description>
+        <p>First stable release of the original Python CosmicSnip.</p>
+      </description>
+    </release>
+    <release version="0.1.0" date="2026-03-13">
+      <description>
+        <p>Initial release of the original Python CosmicSnip.</p>
+      </description>
+    </release>
+  </releases>
+</component>
