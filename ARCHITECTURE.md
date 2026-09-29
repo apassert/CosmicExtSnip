@@ -1,9 +1,10 @@
 # Architecture
 
-CosmicSnip 2 is cosmic-screenshot with an annotation editor after it.
+Snip for COSMIC™ (`cosmic-ext-snip`, formerly CosmicSnip) is cosmic-screenshot
+with an annotation editor after it.
 
 ```
-cosmicsnip
+cosmic-ext-snip
   │
   ├─ capture::request()        XDG Desktop Portal Screenshot
   │     interactive + modal    xdg-desktop-portal-cosmic draws the selection
@@ -17,9 +18,10 @@ cosmicsnip
   │     keys                   P H A R, + -, Ctrl+Z/C/S/N/Q, Esc
   │
   └─ finish
-        Copy  → render::composite → PNG → clipboard::spawn_server → exit
+        Copy  → render::composite → PNG → hand-off → window closes → main serves it
         Save  → portal file chooser → render::composite → write → exit
         Esc   → exit
+        Ctrl+N → window minimised → portal again → same window, new snip
 ```
 
 ## Why the portal draws the selection
@@ -50,7 +52,10 @@ at the snip's own resolution, so HiDPI captures keep every pixel.
 ## The clipboard
 
 On Wayland the process that sets the clipboard must answer every paste. The
-editor therefore writes the PNG to a temporary file and starts
-`cosmicsnip --serve-clipboard <file>` in its own process group. That process
-reads and deletes the file, serves `image/png` until another client takes the
-clipboard, then exits. Copying twice leaves one server.
+editor leaves the PNG in a hand-off slot and closes its window; `main` then
+serves it from the same process until another client takes the clipboard.
+
+It used to re-execute itself as a detached helper. A Flatpak sandbox ends when
+its main process exits, so that helper - and the copy - would die with the
+window. For the same reason Ctrl+N takes a new snip inside the running app
+instead of starting a second process.

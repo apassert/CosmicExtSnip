@@ -2,10 +2,12 @@
 
 All notable changes to CosmicSnip are documented in this file.
 
-## [2.0.0] - 2026-09-25
+## [2.0.0] - 2026-09-29
 
 Rewritten in Rust on libcosmic, following cosmic-screenshot's architecture,
-with CosmicSnip's annotation editor after the snip.
+with CosmicSnip's annotation editor after the snip. Renamed to Snip for
+COSMIC™ (`cosmic-ext-snip`, `io.github.apassert.cosmic-ext-snip`): COSMIC is a
+System76 trademark, and third-party apps use the `cosmic-ext-` namespace.
 
 ### Fixed
 - **A snip can span every monitor.** Selection is drawn by the COSMIC
@@ -16,12 +18,15 @@ with CosmicSnip's annotation editor after the snip.
   The old editor closed while layer-shell overlays were still alive, which the
   overlay code itself documents as crashing on COSMIC.
 - **A copy survives the editor closing.** On Wayland the copying process owns
-  the clipboard; `cosmicsnip --serve-clipboard` keeps serving the PNG after
-  the window closes and exits when something else is copied.
+  the clipboard; the app's own process keeps serving the PNG after the window
+  closes, and exits when something else is copied. No helper process, so it
+  also holds inside a Flatpak sandbox.
+- **Ctrl+N takes the new snip in the same window**, instead of starting a
+  second process.
 
 ### Changed
 - The editor remembers the colour and the pen and highlighter widths in
-  `~/.config/cosmicsnip/editor.conf`; every snip starts with the pen.
+  `~/.config/cosmic-ext-snip/editor.conf`; every snip starts with the pen.
 - One-shot: run, select, annotate, copy or save, exit. Bind it to a shortcut.
 - Installed with `just install` (to `~/.local`) or
   `sudo just prefix=/usr install`.
