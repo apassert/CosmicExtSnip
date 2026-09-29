@@ -28,7 +28,7 @@ use crate::capture::Grab;
 use crate::prefs::Prefs;
 use crate::{clipboard, config, render};
 
-pub const APP_ID: &str = "io.github.apassert.cosmic-ext-snip";
+pub const APP_ID: &str = "io.github.apassert.CosmicExtSnip";
 
 pub struct Flags {
     /// Where a copy is left for `main` to serve after the app exits (outside a sandbox).

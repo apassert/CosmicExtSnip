@@ -5,8 +5,8 @@ Thanks for helping improve Snip for COSMIC™ (`cosmic-ext-snip`).
 ## Development Setup
 
 ```bash
-git clone https://github.com/apassert/cosmic-ext-snip.git
-cd cosmic-ext-snip
+git clone https://github.com/apassert/CosmicExtSnip.git
+cd CosmicExtSnip
 ```
 
 Install the libraries libcosmic links against (Pop!_OS / Ubuntu), then build

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.apassert.cosmic-ext-snip</id>
+  <id>io.github.apassert.CosmicExtSnip</id>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
   <name>Snip for COSMIC™</name>
@@ -28,13 +28,13 @@
       Based on CosmicSnip by itssoup, rewritten in Rust on libcosmic.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.apassert.cosmic-ext-snip.desktop</launchable>
+  <launchable type="desktop-id">io.github.apassert.CosmicExtSnip.desktop</launchable>
   <provides>
     <binary>cosmic-ext-snip</binary>
   </provides>
-  <url type="homepage">https://github.com/apassert/cosmic-ext-snip</url>
-  <url type="bugtracker">https://github.com/apassert/cosmic-ext-snip/issues</url>
-  <url type="vcs-browser">https://github.com/apassert/cosmic-ext-snip</url>
+  <url type="homepage">https://github.com/apassert/CosmicExtSnip</url>
+  <url type="bugtracker">https://github.com/apassert/CosmicExtSnip/issues</url>
+  <url type="vcs-browser">https://github.com/apassert/CosmicExtSnip</url>
   <branding>
     <color type="primary" scheme_preference="light">#64c0c3</color>
     <color type="primary" scheme_preference="dark">#272362</color>

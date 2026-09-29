@@ -67,8 +67,8 @@ the libraries libcosmic links against:
 
 ```bash
 sudo apt install pkg-config libxkbcommon-dev libwayland-dev libfontconfig-dev libfreetype-dev
-git clone https://github.com/apassert/cosmic-ext-snip.git
-cd cosmic-ext-snip
+git clone https://github.com/apassert/CosmicExtSnip.git
+cd CosmicExtSnip
 just install                 # into ~/.local
 # or: sudo just prefix=/usr install
 ```

@@ -2,7 +2,7 @@
 # `sudo just prefix=/usr install` system-wide.
 
 name := 'cosmic-ext-snip'
-appid := 'io.github.apassert.cosmic-ext-snip'
+appid := 'io.github.apassert.CosmicExtSnip'
 prefix := env('HOME') / '.local'
 
 bin-dst := prefix / 'bin' / name
