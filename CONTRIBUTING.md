@@ -9,31 +9,19 @@ git clone https://github.com/itssoup/cosmicsnip.git
 cd cosmicsnip
 ```
 
-Install runtime dependencies (Pop!_OS / Ubuntu):
+Install the libraries libcosmic links against (Pop!_OS / Ubuntu), then build
+and check:
 
 ```bash
-sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
-                 python3-dbus python3-cairo libnotify-bin
-```
-
-Run from source:
-
-```bash
-python3 -m cosmicsnip.app
+sudo apt install pkg-config libxkbcommon-dev libwayland-dev libfontconfig-dev libfreetype-dev
+just check        # cargo test + cargo clippy --all-targets -- -D warnings
+just run
 ```
 
 ## Debug Mode
 
-Use debug logging during development or bug reports:
-
 ```bash
-python3 -m cosmicsnip.app --debug
-```
-
-Logs are written to:
-
-```bash
-~/.local/share/cosmicsnip/cosmicsnip.log
+RUST_LOG=debug cargo run
 ```
 
 ## Commit Style
@@ -55,21 +43,22 @@ Use Conventional Commits where possible:
 
 ## Code Style
 
-- Python code should stay readable and consistent with the existing codebase.
-- Prefer clear names and short functions where practical.
-- No mandatory linter configuration is enforced yet, but clean code and minimal noise are expected.
+- `cargo fmt` and `cargo clippy --all-targets -- -D warnings` must be clean.
+- Keep drawing and export logic in the display-free modules (`annotation`,
+  `render`) so it stays covered by `cargo test`.
 
 ## Testing Notes
 
-There is no full automated test suite yet.
+`cargo test` covers the annotation model, the export renderer (pixel
+assertions), portal URI handling and the fit transform. The portal and the
+window need a real session, so also smoke-test on COSMIC Wayland:
 
-Before submitting a PR, run manual smoke tests on COSMIC Wayland:
-
-1. Launch capture from app launcher/tray.
+1. Launch `cosmicsnip` from the launcher or a shortcut.
 2. Drag-select on single and multi-monitor layouts.
 3. Confirm editor tools draw correctly (pen/highlighter/arrow/rect).
 4. Verify copy (`Ctrl+C`) and save (`Ctrl+S`) flows.
-5. Verify cancel (`Esc`/right-click) and new snip (`Ctrl+N`).
+5. Verify `Esc` in the portal and in the editor exits cleanly, and `Ctrl+N`.
+6. Paste after CosmicSnip has exited: the copy must still be there.
 
 ## Security Reports
 

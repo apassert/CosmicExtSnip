@@ -2,6 +2,35 @@
 
 All notable changes to CosmicSnip are documented in this file.
 
+## [2.0.0] - 2026-09-25
+
+Rewritten in Rust on libcosmic, following cosmic-screenshot's architecture,
+with CosmicSnip's annotation editor after the snip.
+
+### Fixed
+- **A snip can span every monitor.** Selection is drawn by the COSMIC
+  screenshot portal (`xdg-desktop-portal-cosmic`), the way `cosmic-screenshot
+  --interactive` does it, instead of by CosmicSnip's own GTK layer-shell
+  overlays, which covered one screen when `gtk4-layer-shell` was missing.
+- **Esc exits without crashing.** The editor is an ordinary toplevel window.
+  The old editor closed while layer-shell overlays were still alive, which the
+  overlay code itself documents as crashing on COSMIC.
+- **A copy survives the editor closing.** On Wayland the copying process owns
+  the clipboard; `cosmicsnip --serve-clipboard` keeps serving the PNG after
+  the window closes and exits when something else is copied.
+
+### Changed
+- The editor remembers the colour and the pen and highlighter widths in
+  `~/.config/cosmicsnip/editor.conf`; every snip starts with the pen.
+- One-shot: run, select, annotate, copy or save, exit. Bind it to a shortcut.
+- Installed with `just install` (to `~/.local`) or
+  `sudo just prefix=/usr install`.
+
+### Removed
+- The Python/GTK code, tray icon, autostart entry, single-instance daemon,
+  Debian packaging and the Python audit tooling. They remain in history.
+- Drawing beyond the snip's edge and trimming the export to the drawn bounds.
+
 ## [1.0.4] - 2026-03-22
 
 ### Fixed

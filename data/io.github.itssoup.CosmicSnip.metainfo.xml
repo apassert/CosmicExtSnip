@@ -12,7 +12,7 @@
     </p>
     <p>Features:</p>
     <ul>
-      <li>Instant fullscreen capture with drag-to-select region</li>
+      <li>Region selection by the COSMIC screenshot portal, across every monitor</li>
       <li>Annotation tools: pen, highlighter, arrow, rectangle</li>
       <li>Copy to clipboard with a single keystroke (Ctrl+C)</li>
       <li>Save As dialog with full path control (Ctrl+S)</li>
@@ -38,6 +38,11 @@
   </developer>
   <update_contact>itssoup@users.noreply.github.com</update_contact>
   <releases>
+    <release version="2.0.0" date="2026-09-25">
+      <description>
+        <p>Rewritten in Rust on libcosmic. The screenshot portal draws the selection, so a snip can span monitors and Esc exits cleanly.</p>
+      </description>
+    </release>
     <release version="1.0.4" date="2026-03-22">
       <description>
         <p>Persistent overlay windows with safe reuse, full security audit, maintainability CI, and SOC 2 Type II audit traceability.</p>

@@ -26,68 +26,60 @@ COSMIC Desktop uses its own Wayland compositor, which breaks every existing scre
 | `gnome-screenshot` | No Wayland support, X11 only |
 | COSMIC built-in | Captures full screen only — no region select, no annotation |
 
-CosmicSnip works because it uses the **XDG Desktop Portal** (`cosmic-screenshot`) for capture — the same protocol COSMIC itself uses. Everything else is native GTK4 + Cairo, no X11 compatibility layers.
+CosmicSnip works because it asks the **XDG Desktop Portal** for the
+screenshot, exactly as `cosmic-screenshot --interactive` does. COSMIC's own
+portal draws the selection across every monitor; CosmicSnip then opens its
+annotation editor on the result. It is a Rust application on
+[libcosmic](https://github.com/pop-os/libcosmic), so it looks like the rest of
+the desktop.
 
 ---
 
 ## Features
 
-**Capture**
-- Drag-to-select any region across one or multiple monitors
-- Per-monitor fullscreen overlays via `gtk4-layer-shell`
-- Esc or right-click to cancel
+**Capture** (drawn by the COSMIC screenshot portal)
+- Drag a region on any monitor, or across several
+- `Enter` takes it, `Esc` cancels and CosmicSnip exits
 
 **Annotate**
-- Pen, highlighter, arrow, rectangle tools
-- 6-colour palette + adjustable stroke width
-- Draw beyond the screenshot edge — canvas extends past the image bounds
-- Full undo (Ctrl+Z, up to 200 steps)
+- Pen, highlighter, arrow, rectangle
+- 6-colour palette and adjustable stroke width
+- Undo (`Ctrl+Z`, up to 200 steps)
+- Remembers your colour and stroke widths for the next snip; every snip starts with the pen
 
 **Output**
-- Auto-copies to clipboard on capture (paste immediately)
-- Transparent PNG — annotations outside the image are on a transparent background
-- Auto-trims to content bounds (no wasted space)
-- Save As dialog with path control (Ctrl+S)
+- `Ctrl+C` copies the annotated snip at full resolution and closes; it stays
+  on the clipboard after CosmicSnip has exited
+- `Ctrl+S` saves a PNG, by default under `~/Pictures/Screenshots/`
 
-**System integration**
-- System tray icon in COSMIC's panel bar
-- Stays alive between snips — re-activate from dock, tray, or Ctrl+N
-- Single-instance: launching again brings back the running app
-- Native libadwaita look matching COSMIC's dark theme
-
-### Keyboard shortcuts
+### Keyboard shortcuts (editor)
 
 | Key | Action |
 |-----|--------|
-| `P` `H` `A` `R` | Switch tool (Pen / Highlighter / Arrow / Rectangle) |
-| `Ctrl+C` | Copy to clipboard (with annotations) |
-| `Ctrl+S` | Save as PNG |
+| `P` `H` `A` `R` | Pen / Highlighter / Arrow / Rectangle |
+| `+` / `-` | Thicker / thinner stroke |
+| `Ctrl+C` | Copy to the clipboard and close |
+| `Ctrl+S` | Save as PNG and close |
 | `Ctrl+Z` | Undo |
-| `Ctrl+N` | New screenshot |
-| `Ctrl+Q` | Quit |
-| `Esc` | Close editor / cancel selection |
+| `Ctrl+N` | New snip |
+| `Esc`, `Ctrl+Q` | Close |
 
 ---
 
 ## Install
 
-### From .deb (recommended, no source checkout)
-
-Download from [Releases](https://github.com/itssoup/cosmicsnip/releases/latest) and install:
-
-```bash
-VERSION="1.0.3"
-wget "https://github.com/itssoup/cosmicsnip/releases/download/v${VERSION}/cosmicsnip_${VERSION}-1_all.deb"
-sudo apt install "./cosmicsnip_${VERSION}-1_all.deb"
-```
-
-### From source
+Requires Rust (1.85 or newer), [`just`](https://github.com/casey/just), and
+the libraries libcosmic links against:
 
 ```bash
-git clone https://github.com/itssoup/cosmicsnip.git
+sudo apt install pkg-config libxkbcommon-dev libwayland-dev libfontconfig-dev libfreetype-dev
+git clone https://github.com/apassert/cosmicsnip.git
 cd cosmicsnip
-bash install.sh
+just install                 # into ~/.local
+# or: sudo just prefix=/usr install
 ```
+
+The first build compiles libcosmic and takes several minutes.
 
 ### Set up a keyboard shortcut
 
@@ -104,30 +96,16 @@ bash install.sh
 ## Uninstall
 
 ```bash
-sudo apt remove cosmicsnip
+just uninstall               # or: sudo just prefix=/usr uninstall
 ```
 
 ---
 
-## Build .deb from source
+## Develop
 
 ```bash
-git clone https://github.com/itssoup/cosmicsnip.git
-cd cosmicsnip
-./build-deb.sh
-sudo apt install ./dist/cosmicsnip_1.0.3-1_all.deb
-```
-
-Build requires: `python3`, `dpkg-deb`
-
----
-
-## Run without installing
-
-```bash
-sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
-                 python3-dbus python3-cairo libnotify-bin
-python3 -m cosmicsnip.app
+just check                   # cargo test + clippy -D warnings
+just run
 ```
 
 ---
@@ -140,25 +118,16 @@ Security policy and coordinated disclosure: [`SECURITY.md`](SECURITY.md).
 
 ### What we do
 
-- **No root execution** — hard exit if run as root
-- **No network access** — nothing leaves your machine. No telemetry, no cloud, no updates phoning home
-- **Temp file hardening** — screenshots are written to `$XDG_RUNTIME_DIR/cosmicsnip/` with mode `0600`, owned by your user. Temp dir ownership is verified at startup
-- **Symlink attack prevention** — all file operations use `O_NOFOLLOW` and reject symlinks. Config files that are symlinks are refused
-- **Path traversal protection** — all paths are resolved and validated against allowed directories before any read/write
-- **TOCTOU-safe file operations** — chmod uses fd-based `fchmod()`, not path-based, to prevent race conditions
-- **PNG validation** — captured files are verified by magic bytes before processing
-- **Image dimension limits** — capture files are rejected if dimensions exceed configured safety bounds
-- **Sandboxed XDG paths** — `XDG_RUNTIME_DIR`, `XDG_PICTURES_DIR` etc. are validated to be within `$HOME`, `/run`, or `/tmp`
-- **Save path restrictions** — blocks saving to system directories (`/etc`, `/usr`, `/bin`, `/proc`, etc.)
-- **Process umask `0077`** — all files created by the app are owner-only by default
-- **Log file permissions** — `0600`, rotated with 512KB limit
-- **Subprocess hardening** — `notify-send` calls are truncated and time-limited (5s)
+- **No network access** — nothing leaves your machine. No telemetry, no cloud
+- **No surfaces of our own before the editor** — selection is the portal's; CosmicSnip creates one ordinary window
+- **PNG validation** — the capture must decode as a PNG, within 15360 × 8640 pixels
+- **Short-lived clipboard file** — a copy is handed to the clipboard server through a file in the temp directory, which the server deletes as soon as it has read it
 
 ### What we don't do
 
-- We don't encrypt screenshots at rest. They're saved as standard PNGs in `~/Pictures/screenshots/`
-- We don't clear clipboard after a timeout. Your screenshot stays on the clipboard until you copy something else
-- We don't sandbox the Python process beyond standard user permissions
+- We don't encrypt screenshots at rest. Saved snips are standard PNGs
+- We don't clear the clipboard after a timeout. The snip stays until you copy something else
+- We don't sandbox the process beyond standard user permissions
 
 ### Reporting vulnerabilities
 
@@ -170,14 +139,11 @@ Do not open public issues for security reports. Use private reporting as documen
 
 | Component | Detail |
 |-----------|--------|
-| Capture | `cosmic-screenshot` via XDG Desktop Portal |
-| UI | GTK4 + libadwaita (PyGObject) |
-| Drawing | Cairo 2D (pycairo) |
-| Clipboard | GTK4 native `Gdk.ContentProvider` |
-| Overlay | `gtk4-layer-shell` per-monitor surfaces |
-| Tray | DBus StatusNotifierItem protocol |
-| Packaging | dpkg `.deb` |
-| Language | Python 3.12 |
+| Capture | XDG Desktop Portal `Screenshot` via `ashpd`, as in cosmic-screenshot |
+| UI | libcosmic (iced) |
+| Export | `tiny-skia`, at the snip's native resolution |
+| Clipboard | `wl-clipboard-rs`, served by a detached `cosmicsnip --serve-clipboard` |
+| Language | Rust |
 
 ---
 
@@ -194,8 +160,7 @@ Pull requests are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, w
 If something breaks on your COSMIC setup, open an issue with the log:
 
 ```bash
-cosmicsnip --debug
-cat ~/.local/share/cosmicsnip/cosmicsnip.log
+RUST_LOG=debug cosmicsnip
 ```
 
 ---

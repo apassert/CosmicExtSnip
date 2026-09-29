@@ -1,0 +1,31 @@
+[package]
+name = "cosmicsnip"
+version = "2.0.0"
+edition = "2024"
+license = "MIT"
+description = "Snip a region of the COSMIC desktop through the screenshot portal, then annotate it"
+repository = "https://github.com/apassert/cosmicsnip"
+rust-version = "1.85"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+jiff = "0.2"
+log = "0.4"
+env_logger = "0.11"
+tiny-skia = "0.11"
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread"] }
+wl-clipboard-rs = "0.9"
+
+# The revision cosmic-files builds against on this machine; the lock file was
+# seeded from cosmic-files so every transitive version starts from a set that
+# is known to build here.
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+rev = "9cc82abd9ca5601bb0341edd12a9acbc97e77801"
+default-features = false
+# a11y is left out: cosmic-files' manifest notes that it crashes.
+features = ["winit", "tokio", "wayland", "xdg-portal", "dbus-config"]
+
+[profile.release]
+lto = "thin"
