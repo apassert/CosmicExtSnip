@@ -9,3 +9,4 @@ pub mod clipboard;
 pub mod config;
 pub mod prefs;
 pub mod render;
+pub mod sandbox;

@@ -60,12 +60,22 @@ fn percent_decode(s: &str) -> String {
 
 /// Asks the portal for an interactive screenshot. `Ok(None)` means the user
 /// pressed Esc in the portal's selection.
-pub async fn request() -> Result<Option<Pixmap>, String> {
+/// What the portal handed back.
+#[derive(Clone, Debug)]
+pub enum Grab {
+    Image(Pixmap),
+    /// The portal put it on the clipboard and this process cannot read the
+    /// clipboard without a window of its own (a sandbox: see sandbox.rs).
+    OnClipboard,
+}
+
+pub async fn request() -> Result<Option<Grab>, String> {
+    let sandboxed = crate::sandbox::sandboxed();
     // The portal answers `clipboard:///` before it has written the clipboard
     // (xdg-desktop-portal-cosmic sends the reply, then runs the write task), so
     // an immediate read returns whatever was there before - often the previous
     // snip. Remember that, and wait for the clipboard to change.
-    let before = clipboard_png();
+    let before = if sandboxed { None } else { clipboard_png() };
     let request = Screenshot::request()
         .interactive(true)
         .modal(true)
@@ -81,9 +91,10 @@ pub async fn request() -> Result<Option<Pixmap>, String> {
         Location::File(path) => {
             std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?
         }
+        Location::Clipboard if sandboxed => return Ok(Some(Grab::OnClipboard)),
         Location::Clipboard => read_fresh_clipboard_png(before.as_deref())?,
     };
-    render::decode_png(&bytes).map(Some)
+    render::decode_png(&bytes).map(|p| Some(Grab::Image(p)))
 }
 
 /// The `image/png` on the clipboard now, if any.

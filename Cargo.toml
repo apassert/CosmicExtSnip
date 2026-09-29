@@ -25,7 +25,7 @@ git = "https://github.com/pop-os/libcosmic.git"
 rev = "9cc82abd9ca5601bb0341edd12a9acbc97e77801"
 default-features = false
 # a11y is left out: cosmic-files' manifest notes that it crashes.
-features = ["winit", "tokio", "wayland", "xdg-portal", "dbus-config"]
+features = ["winit", "tokio", "wayland", "xdg-portal", "dbus-config", "single-instance"]
 
 [profile.release]
 lto = "thin"
