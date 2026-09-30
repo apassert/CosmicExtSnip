@@ -79,3 +79,10 @@ Wayland"). So an editor that has to leave the screen for a new snip is closed,
 and a new window opens on the result; a cancelled selection reopens the
 previous snip. The only window that is minimised instead is the one holding a
 sandboxed copy (above).
+
+The editor window is the snip at 1:1 plus the header: the content runs edge to
+edge (libcosmic's padded content box is off), the canvas reports the size it
+really got on its first frame, and the window is corrected by the difference.
+It is never narrower than the toolbar; a narrower snip is centred. Its
+*position* is the compositor's: a Wayland client cannot place a toplevel, and
+the screenshot portal answers with the image only, not where the selection was.

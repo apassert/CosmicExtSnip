@@ -30,6 +30,15 @@ use crate::{clipboard, config, render};
 
 pub const APP_ID: &str = "io.github.apassert.CosmicExtSnip";
 
+/// The header's tools need this much width; a narrower snip is centred.
+const TOOLBAR_MIN_WIDTH: f32 = 720.0;
+const MIN_WINDOW_HEIGHT: f32 = 240.0;
+/// Header bar height at the standard density (32 + 7 + 8, libcosmic header_bar);
+/// only a first guess, corrected once the canvas has measured itself.
+const HEADER_GUESS: f32 = 47.0;
+/// One 2560x1440 screen, less the panel.
+const MAX_WINDOW: Size = Size::new(2560.0, 1360.0);
+
 pub struct Flags {
     /// Where a copy is left for `main` to serve after the app exits (outside a sandbox).
     pub handoff: clipboard::Handoff,
@@ -58,6 +67,9 @@ pub enum Message {
     CloseWindow,
     /// The window manager asks a window of ours to close.
     CloseRequested(window::Id),
+    /// What the canvas really got on its first frame: the window is then
+    /// corrected by the difference so the snip shows at exactly 1:1.
+    CanvasSize(Size),
     /// While drawing freehand: has the pointer been held still long enough?
     Tick(std::time::Instant),
     Exit,
@@ -81,6 +93,9 @@ pub struct App {
     /// An editor was open when the snip started: a cancelled selection brings
     /// the previous snip back instead of ending the app.
     reopen_on_cancel: bool,
+    /// The window size last asked for, and how many corrections it has had.
+    requested: Option<Size>,
+    fit_tries: u8,
     /// Hold-to-straighten: where the pointer last moved, and when.
     hold: Hold,
     handle: Handle,
@@ -255,12 +270,37 @@ impl App {
         Some(window::close(id))
     }
 
-    /// The snip plus the header bar, within what fits on a screen.
+    /// The snip plus the header bar, at 1:1, never narrower than the toolbar
+    /// and never larger than a screen. A first guess: the canvas reports what
+    /// it really got (CanvasSize) and the window is corrected by the difference.
     fn window_size(&self) -> Size {
         Size::new(
-            (self.snip.width() as f32).clamp(560.0, 1600.0),
-            (self.snip.height() as f32 + 56.0).clamp(360.0, 1000.0),
+            (self.snip.width() as f32).clamp(TOOLBAR_MIN_WIDTH, MAX_WINDOW.width),
+            (self.snip.height() as f32 + HEADER_GUESS).clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW.height),
         )
+    }
+
+    /// The canvas reported its size: make the window exactly the snip plus
+    /// whatever the header and frame really take. At most twice per snip.
+    fn fit_to_snip(&mut self, canvas: Size) -> Task<Message> {
+        let (Some(id), Some(asked)) = (self.core.main_window_id(), self.requested) else {
+            return Task::none();
+        };
+        if self.fit_tries >= 2 {
+            return Task::none();
+        }
+        let target = Size::new(
+            (self.snip.width() as f32 + (asked.width - canvas.width))
+                .clamp(TOOLBAR_MIN_WIDTH, MAX_WINDOW.width),
+            (self.snip.height() as f32 + (asked.height - canvas.height))
+                .clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW.height),
+        );
+        if (target.width - asked.width).abs() < 0.5 && (target.height - asked.height).abs() < 0.5 {
+            return Task::none();
+        }
+        self.fit_tries += 1;
+        self.requested = Some(target);
+        window::resize(id, target)
     }
 
     /// Opens a new editor window for the current snip; an open one is focused.
@@ -268,9 +308,11 @@ impl App {
         if let Some(id) = self.core.main_window_id() {
             return window::gain_focus(id);
         }
+        self.requested = Some(self.window_size());
+        self.fit_tries = 0;
         let mut settings = window::Settings {
             size: self.window_size(),
-            min_size: Some(Size::new(560.0, 360.0)),
+            min_size: Some(Size::new(TOOLBAR_MIN_WIDTH, MIN_WINDOW_HEIGHT)),
             resizable: true,
             decorations: false,
             transparent: true,
@@ -356,6 +398,8 @@ impl cosmic::Application for App {
             holding_copy: false,
             clip_window: None,
             reopen_on_cancel: false,
+            requested: None,
+            fit_tries: 0,
             hold: Hold::default(),
             handle,
             doc: Document::default(),
@@ -365,6 +409,9 @@ impl cosmic::Application for App {
             highlight_width: prefs.highlight_width,
             error: None,
         };
+        // The snip runs edge to edge under the header: no padded content box,
+        // so the window can be exactly the snip plus the header.
+        app.core.window.content_container = false;
         let first = app.start_capture();
         (app, first)
     }
@@ -472,6 +519,8 @@ impl cosmic::Application for App {
                     // The window opened before its size was known (the snip was
                     // still on the clipboard); fit it to the snip now.
                     if let Some(id) = self.core.main_window_id() {
+                        self.requested = Some(self.window_size());
+                        self.fit_tries = 0;
                         return window::resize(id, self.window_size());
                     }
                 }
@@ -486,6 +535,7 @@ impl cosmic::Application for App {
                 self.error = Some("the snip was copied, but it could not be read back; take it with Enter instead".into());
             }
             Message::CloseWindow => return self.close_window(),
+            Message::CanvasSize(size) => return self.fit_to_snip(size),
             Message::CloseRequested(id) => {
                 if Some(id) == self.core.main_window_id() {
                     return self.close_window();
@@ -528,16 +578,11 @@ impl cosmic::Application for App {
     }
 
     fn header_start(&self) -> Vec<Element<'_, Message>> {
-        let new = button::standard("New snip")
-            .leading_icon(widget::icon::from_name("list-add-symbolic"))
-            .on_press(Message::New);
         let mut items: Vec<Element<'_, Message>> = vec![
-            widget::tooltip(
-                new,
-                widget::text::body("New snip (Ctrl+N)"),
-                widget::tooltip::Position::Bottom,
-            )
-            .into(),
+            button::icon(widget::icon::from_name("list-add-symbolic"))
+                .tooltip("New snip (Ctrl+N)")
+                .on_press(Message::New)
+                .into(),
         ];
         items.extend(Tool::ALL.iter().map(|&tool| {
             button::icon(widget::icon::from_name(tool.icon()))
@@ -572,7 +617,10 @@ impl cosmic::Application for App {
                 .tooltip("Undo (Ctrl+Z)")
                 .on_press_maybe((!self.doc.committed().is_empty()).then_some(Message::Undo))
                 .into(),
-            button::standard("Save").on_press(Message::Save).into(),
+            button::icon(widget::icon::from_name("document-save-symbolic"))
+                .tooltip("Save (Ctrl+S)")
+                .on_press(Message::Save)
+                .into(),
             button::suggested("Copy").on_press(Message::Copy).into(),
         ];
         if let Some(e) = &self.error {
@@ -683,6 +731,8 @@ struct Board<'a> {
 #[derive(Default)]
 struct Pointer {
     drawing: bool,
+    /// The canvas size last reported for this snip, so it is said once.
+    reported: Option<(u32, u32, u32, u32)>,
 }
 
 impl Board<'_> {
@@ -706,6 +756,19 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        if let canvas::Event::Window(window::Event::RedrawRequested(_)) = event {
+            let key = (
+                self.app.snip.width(),
+                self.app.snip.height(),
+                bounds.width.round() as u32,
+                bounds.height.round() as u32,
+            );
+            if state.reported == Some(key) {
+                return None;
+            }
+            state.reported = Some(key);
+            return Some(canvas::Action::publish(Message::CanvasSize(bounds.size())));
+        }
         let canvas::Event::Mouse(event) = event else {
             return None;
         };
@@ -770,6 +833,16 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
 }
 
 fn draw_stroke(frame: &mut Frame, fit: &Fit, stroke: &Stroke) {
+    // A shape with no extent draws nothing, and the renderer logs a warning for
+    // every such path on every frame ("empty paths and horizontal/vertical lines
+    // cannot be filled"): the first point of a stroke, an arrow not yet dragged.
+    let degenerate = match &stroke.shape {
+        Shape::Path(points) => points.windows(2).all(|w| w[0] == w[1]),
+        Shape::Arrow { start, end } | Shape::Rect { start, end } => start == end,
+    };
+    if degenerate {
+        return;
+    }
     let style = IStroke::default()
         .with_color(to_color(stroke.rgba))
         .with_width(stroke.width * fit.scale)
