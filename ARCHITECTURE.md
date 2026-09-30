@@ -80,9 +80,16 @@ and a new window opens on the result; a cancelled selection reopens the
 previous snip. The only window that is minimised instead is the one holding a
 sandboxed copy (above).
 
-The editor window is the snip at 1:1 plus the header: the content runs edge to
-edge (libcosmic's padded content box is off), the canvas reports the size it
-really got on its first frame, and the window is corrected by the difference.
-It is never narrower than the toolbar; a narrower snip is centred. Its
+The editor window is the snip at 1:1 plus the header, sized exactly when it
+is created: content edge to edge (libcosmic's padded content box off), plus
+libcosmic's 1 px window border and the header at the user's density (39 px
+compact, 47 px standard). It has to be right at creation - COSMIC keeps a
+floating window at the size it was mapped with, and both `window::resize` and
+setting min = max afterwards were measured to change nothing. It opens pinned
+(min = max) so COSMIC maps it floating even on a tiled workspace, and is
+unpinned after its first frame so it can be resized. For Ctrl+C in the
+selection the size is only known once the snip is read, so that window is
+replaced by one of the right size. It is never narrower than the toolbar; a
+narrower snip is centred on a transparent background. Its
 *position* is the compositor's: a Wayland client cannot place a toplevel, and
 the screenshot portal answers with the image only, not where the selection was.

@@ -33,9 +33,9 @@ pub const APP_ID: &str = "io.github.apassert.CosmicExtSnip";
 /// The header's tools need this much width; a narrower snip is centred.
 const TOOLBAR_MIN_WIDTH: f32 = 720.0;
 const MIN_WINDOW_HEIGHT: f32 = 240.0;
-/// Header bar height at the standard density (32 + 7 + 8, libcosmic header_bar);
-/// only a first guess, corrected once the canvas has measured itself.
-const HEADER_GUESS: f32 = 47.0;
+/// libcosmic draws a 1 px border around a window that is not maximised
+/// (view_main: `.padding(if maximized { 0 } else { 1 })`).
+const BORDER: f32 = 1.0;
 /// One 2560x1440 screen, less the panel.
 const MAX_WINDOW: Size = Size::new(2560.0, 1360.0);
 
@@ -97,9 +97,8 @@ pub struct App {
     /// An editor was open when the snip started: a cancelled selection brings
     /// the previous snip back instead of ending the app.
     reopen_on_cancel: bool,
-    /// The window size last asked for, and how many corrections it has had.
-    requested: Option<Size>,
-    fit_tries: u8,
+    /// The editor has been unpinned after its first frame; resizing is the user's.
+    settled: bool,
     /// Hold-to-straighten: where the pointer last moved, and when.
     hold: Hold,
     handle: Handle,
@@ -274,50 +273,41 @@ impl App {
         Some(window::close(id))
     }
 
-    /// The snip plus the header bar, at 1:1, never narrower than the toolbar
-    /// and never larger than a screen. A first guess: the canvas reports what
-    /// it really got (CanvasSize) and the window is corrected by the difference.
+    /// The snip at 1:1 plus the header bar and the window border, never
+    /// narrower than the toolbar and never larger than a screen. Exact at
+    /// creation, because COSMIC keeps a floating window at the size it was
+    /// mapped with: resizing it afterwards from the app changed nothing
+    /// (measured: window::resize, and min = max after mapping, both ignored).
     fn window_size(&self) -> Size {
         Size::new(
-            (self.snip.width() as f32).clamp(TOOLBAR_MIN_WIDTH, MAX_WINDOW.width),
-            (self.snip.height() as f32 + HEADER_GUESS).clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW.height),
+            (self.snip.width() as f32 + 2.0 * BORDER).clamp(TOOLBAR_MIN_WIDTH, MAX_WINDOW.width),
+            (self.snip.height() as f32 + header_height() + 2.0 * BORDER)
+                .clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW.height),
         )
     }
 
-    /// The canvas reported its size: make the window exactly the snip plus
-    /// whatever the header and frame really take. At most twice per snip.
-    fn fit_to_snip(&mut self, canvas: Size) -> Task<Message> {
-        let (Some(id), Some(asked)) = (self.core.main_window_id(), self.requested) else {
+    /// The editor opened pinned (min = max), so that COSMIC mapped it floating
+    /// even on a tiled workspace: cosmic-comp decides that once, at map time
+    /// (src/shell/mod.rs, map_window -> is_dialog). After its first frame it
+    /// may be resized.
+    fn settle(&mut self, canvas: Size) -> Task<Message> {
+        let Some(id) = self.core.main_window_id() else {
             return Task::none();
         };
-        if self.fit_tries >= 2 {
-            return Task::none();
-        }
-        let target = Size::new(
-            (self.snip.width() as f32 + (asked.width - canvas.width))
-                .clamp(TOOLBAR_MIN_WIDTH, MAX_WINDOW.width),
-            (self.snip.height() as f32 + (asked.height - canvas.height))
-                .clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW.height),
+        log::debug!(
+            "editor: snip {}x{}, canvas {canvas:?}",
+            self.snip.width(),
+            self.snip.height()
         );
-        if (target.width - asked.width).abs() < 0.5 && (target.height - asked.height).abs() < 0.5 {
+        if self.settled {
             return Task::none();
         }
-        self.fit_tries += 1;
-        self.requested = Some(target);
-        Self::pin_size(id, target)
-    }
-
-    /// Resize and pin: minimum and maximum equal to the size. cosmic-comp treats
-    /// a window whose min size equals its max size as a dialog and floats it
-    /// even on a tiled workspace (cosmic-comp src/shell/layout/mod.rs,
-    /// is_dialog); a tiled editor is stretched to its tile, whatever it asks.
-    /// The limits are lifted first, or the old ones would clamp the new size.
-    fn pin_size(id: window::Id, size: Size) -> Task<Message> {
-        window::set_max_size::<cosmic::Action<Message>>(id, None)
-            .chain(window::set_min_size(id, None))
-            .chain(window::resize(id, size))
-            .chain(window::set_min_size(id, Some(size)))
-            .chain(window::set_max_size(id, Some(size)))
+        self.settled = true;
+        window::set_min_size::<cosmic::Action<Message>>(
+            id,
+            Some(Size::new(TOOLBAR_MIN_WIDTH, MIN_WINDOW_HEIGHT)),
+        )
+        .chain(window::set_max_size(id, None))
     }
 
     /// Opens a new editor window for the current snip; an open one is focused.
@@ -325,15 +315,15 @@ impl App {
         if let Some(id) = self.core.main_window_id() {
             return window::gain_focus(id);
         }
-        self.requested = Some(self.window_size());
-        self.fit_tries = 0;
+        self.settled = false;
         // Pinned from the first frame (min = max), so the compositor floats it
-        // rather than tiling it: see pin_size.
+        // rather than tiling it: see settle.
         let mut settings = window::Settings {
             size: self.window_size(),
             min_size: Some(self.window_size()),
             max_size: Some(self.window_size()),
-            resizable: false,
+            // Resizable once unpinned (fit_to_snip -> unpin).
+            resizable: true,
             decorations: false,
             transparent: true,
             exit_on_close_request: false,
@@ -381,6 +371,15 @@ impl App {
     }
 }
 
+/// The header bar's height at the user's density: 32 plus libcosmic's padding
+/// (header_bar.rs: compact [3, _, 4, _], otherwise [7, _, 8, _]).
+fn header_height() -> f32 {
+    match cosmic::config::header_size() {
+        cosmic::cosmic_theme::Density::Compact => 39.0,
+        _ => 47.0,
+    }
+}
+
 /// Debug only: where to save the window's own rendering once, then exit.
 fn dump_path() -> Option<PathBuf> {
     std::env::var_os("COSMIC_EXT_SNIP_DUMP").map(PathBuf::from)
@@ -423,8 +422,7 @@ impl cosmic::Application for App {
             holding_copy: false,
             clip_window: None,
             reopen_on_cancel: false,
-            requested: None,
-            fit_tries: 0,
+            settled: false,
             hold: Hold::default(),
             handle,
             doc: Document::default(),
@@ -556,13 +554,10 @@ impl cosmic::Application for App {
             Message::ClipboardImage(Some(png), _) => match crate::render::decode_png(&png.0) {
                 Ok(snip) => {
                     self.set_snip(snip);
-                    // The window opened before its size was known (the snip was
-                    // still on the clipboard); fit it to the snip now.
-                    if let Some(id) = self.core.main_window_id() {
-                        self.requested = Some(self.window_size());
-                        self.fit_tries = 0;
-                        return Self::pin_size(id, self.window_size());
-                    }
+                    // The window opened before the size was known, and COSMIC
+                    // keeps a mapped window's size: open one of the right size.
+                    let away = self.put_editor_away().unwrap_or_else(Task::none);
+                    return away.chain(self.open_editor());
                 }
                 Err(e) => self.error = Some(format!("the copied snip cannot be read: {e}")),
             },
@@ -576,7 +571,7 @@ impl cosmic::Application for App {
             }
             Message::CloseWindow => return self.close_window(),
             Message::CanvasSize(size) => {
-                let fit = self.fit_to_snip(size);
+                let fit = self.settle(size);
                 // Debug: once the window has settled, save what it rendered.
                 if let (Some(id), Some(_)) = (self.core.main_window_id(), dump_path()) {
                     let shot = cosmic::iced::Task::future(async {
