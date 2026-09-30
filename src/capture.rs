@@ -76,12 +76,22 @@ pub async fn request() -> Result<Option<Grab>, String> {
     // an immediate read returns whatever was there before - often the previous
     // snip. Remember that, and wait for the clipboard to change.
     let before = if sandboxed { None } else { clipboard_png() };
-    let request = Screenshot::request()
+    // ashpd's send() waits for the answer and parses it, so an answer without
+    // a uri fails here - not at response(), where it was first handled and
+    // never arrived (the desktop run on 2026-09-30 still logged "screenshot
+    // portal request failed: ZBus Error: missing field `uri`").
+    let request = match Screenshot::request()
         .interactive(true)
         .modal(true)
         .send()
         .await
-        .map_err(|e| format!("screenshot portal request failed: {e}"))?;
+    {
+        Ok(request) => request,
+        Err(e) if lost_clipboard_answer(sandboxed, &e.to_string()) => {
+            return Ok(Some(Grab::OnClipboard));
+        }
+        Err(e) => return Err(format!("screenshot portal request failed: {e}")),
+    };
     let response = match request.response() {
         Ok(r) => r,
         Err(cosmic::dialog::ashpd::Error::Response(ResponseError::Cancelled)) => return Ok(None),
