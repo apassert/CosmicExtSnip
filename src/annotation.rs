@@ -113,6 +113,9 @@ pub fn arrow_barbs(start: Point, end: Point, width: f32) -> [Point; 2] {
 pub struct Document {
     strokes: Vec<Stroke>,
     current: Option<Stroke>,
+    /// The freehand stroke in progress was straightened: it is now a line whose
+    /// far end follows the pointer.
+    straight: bool,
 }
 
 impl Document {
@@ -129,6 +132,34 @@ impl Document {
             Tool::Rect => Shape::Rect { start: at, end: at },
         };
         self.current = Some(Stroke { shape, rgba, width });
+        self.straight = false;
+    }
+
+    /// Hold still while drawing freehand, and the stroke becomes a straight line
+    /// from where it started to where the pointer is - as the Windows Snipping
+    /// Tool does. Returns whether it changed.
+    pub fn straighten(&mut self) -> bool {
+        let Some(Stroke {
+            shape: Shape::Path(points),
+            ..
+        }) = self.current.as_mut()
+        else {
+            return false;
+        };
+        if self.straight || points.len() < 2 {
+            return false;
+        }
+        let (first, last) = (points[0], points[points.len() - 1]);
+        if first == last {
+            return false;
+        }
+        *points = vec![first, last];
+        self.straight = true;
+        true
+    }
+
+    pub fn is_straight(&self) -> bool {
+        self.straight
     }
 
     /// Move the stroke being drawn: a freehand path gains a point, a line or
@@ -138,6 +169,12 @@ impl Document {
             return;
         };
         match &mut stroke.shape {
+            // A straightened stroke keeps its start and moves its end.
+            Shape::Path(points) if self.straight => {
+                if let Some(end) = points.last_mut() {
+                    *end = at;
+                }
+            }
             Shape::Path(points) => {
                 if points.len() < MAX_STROKE_POINTS && points.last() != Some(&at) {
                     points.push(at);
@@ -149,6 +186,7 @@ impl Document {
 
     /// Commit the stroke being drawn, if it is visible.
     pub fn finish(&mut self) {
+        self.straight = false;
         if let Some(stroke) = self.current.take() {
             if stroke.is_visible() {
                 self.strokes.push(stroke);
@@ -167,6 +205,7 @@ impl Document {
     /// Remove the last committed stroke. Returns whether there was one.
     pub fn undo(&mut self) -> bool {
         self.current = None;
+        self.straight = false;
         self.strokes.pop().is_some()
     }
 
@@ -177,6 +216,35 @@ impl Document {
     /// Everything to draw, the stroke in progress last.
     pub fn all(&self) -> impl Iterator<Item = &Stroke> {
         self.strokes.iter().chain(self.current.iter())
+    }
+}
+
+/// Whether the pointer has been held still while drawing. Time comes in from
+/// outside, so the rule is tested without a clock.
+#[derive(Debug, Default)]
+pub struct Hold {
+    at: Option<(Point, std::time::Instant)>,
+}
+
+impl Hold {
+    /// The pointer is at `at` now. Movement within the jitter radius is not
+    /// movement: a hand holding a mouse still still trembles a pixel or two.
+    pub fn moved(&mut self, at: Point, now: std::time::Instant) {
+        let still = self.at.is_some_and(|(p, _)| {
+            ((p.x - at.x).powi(2) + (p.y - at.y).powi(2)).sqrt() <= crate::config::STRAIGHTEN_JITTER
+        });
+        if !still {
+            self.at = Some((at, now));
+        }
+    }
+
+    pub fn held(&self, now: std::time::Instant) -> bool {
+        self.at
+            .is_some_and(|(_, since)| now.duration_since(since) >= crate::config::STRAIGHTEN_AFTER)
+    }
+
+    pub fn reset(&mut self) {
+        self.at = None;
     }
 }
 
@@ -267,5 +335,57 @@ mod tests {
         assert_eq!(Tool::from_hotkey('a'), Some(Tool::Arrow));
         assert_eq!(Tool::from_hotkey('r'), Some(Tool::Rect));
         assert_eq!(Tool::from_hotkey('x'), None);
+    }
+
+    #[test]
+    fn holding_still_straightens_a_pen_stroke_from_its_start() {
+        let mut d = Document::default();
+        d.begin(Tool::Pen, [1.0, 0.0, 0.0, 1.0], 3.0, Point::new(0.0, 0.0));
+        for (x, y) in [(3.0, 5.0), (8.0, 2.0), (20.0, 10.0)] {
+            d.extend(Point::new(x, y));
+        }
+        assert!(d.straighten());
+        assert!(d.is_straight());
+        assert_eq!(
+            d.all().last().unwrap().shape,
+            Shape::Path(vec![Point::new(0.0, 0.0), Point::new(20.0, 10.0)])
+        );
+        // After that the line's end follows the pointer; it gains no points.
+        d.extend(Point::new(40.0, 0.0));
+        assert_eq!(
+            d.all().last().unwrap().shape,
+            Shape::Path(vec![Point::new(0.0, 0.0), Point::new(40.0, 0.0)])
+        );
+        d.finish();
+        assert_eq!(d.committed().len(), 1);
+        assert!(!d.is_straight());
+    }
+
+    #[test]
+    fn only_a_freehand_stroke_that_went_somewhere_is_straightened() {
+        let mut d = Document::default();
+        d.begin(Tool::Pen, [1.0; 4], 3.0, Point::new(5.0, 5.0));
+        assert!(!d.straighten(), "a dot has no direction");
+        d.begin(Tool::Arrow, [1.0; 4], 3.0, Point::new(0.0, 0.0));
+        d.extend(Point::new(9.0, 9.0));
+        assert!(!d.straighten(), "an arrow is straight already");
+        let mut d = Document::default();
+        assert!(!d.straighten(), "nothing is being drawn");
+    }
+
+    #[test]
+    fn a_hold_is_a_second_without_moving_beyond_the_jitter() {
+        let t0 = std::time::Instant::now();
+        let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
+        let mut h = Hold::default();
+        h.moved(Point::new(0.0, 0.0), ms(0));
+        h.moved(Point::new(1.5, 1.0), ms(600)); // a tremble, not a move
+        assert!(!h.held(ms(900)));
+        assert!(h.held(ms(1000)));
+        h.moved(Point::new(10.0, 0.0), ms(1100)); // a real move starts the clock again
+        assert!(!h.held(ms(1500)));
+        assert!(h.held(ms(2100)));
+        h.reset();
+        assert!(!h.held(ms(5000)));
     }
 }

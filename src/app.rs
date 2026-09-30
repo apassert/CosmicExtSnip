@@ -23,7 +23,7 @@ use cosmic::widget::{self, button, container};
 use cosmic::{Element, Renderer, Theme};
 use tiny_skia::Pixmap;
 
-use crate::annotation::{Document, Point, Shape, Stroke, Tool, arrow_barbs};
+use crate::annotation::{Document, Hold, Point, Shape, Stroke, Tool, arrow_barbs};
 use crate::capture::Grab;
 use crate::prefs::Prefs;
 use crate::{clipboard, config, render};
@@ -56,6 +56,8 @@ pub enum Message {
     /// The portal's copy, read through our window; the attempt number.
     ClipboardImage(Option<clipboard::Png>, u8),
     CloseWindow,
+    /// While drawing freehand: has the pointer been held still long enough?
+    Tick(std::time::Instant),
     Exit,
     Begin(Point),
     Extend(Point),
@@ -71,6 +73,8 @@ pub struct App {
     capturing: bool,
     /// A sandboxed copy is being held by this process's window clipboard.
     holding_copy: bool,
+    /// Hold-to-straighten: where the pointer last moved, and when.
+    hold: Hold,
     handle: Handle,
     doc: Document,
     tool: Tool,
@@ -250,13 +254,18 @@ impl App {
     }
 
     /// Esc, the close button and a finished save. The process ends with the
-    /// window unless it holds a sandboxed copy, which would end with it.
+    /// window unless it holds a sandboxed copy. Then the window is minimised,
+    /// not closed: iced ties its clipboard to a window, and closing the last one
+    /// drops the clipboard connection (iced_winit lib.rs, RemoveWindow ->
+    /// Clipboard::unconnected). With it went the copy - the second Ctrl+C in a
+    /// session "just closed" on the desktop, 2026-09-30. The same window comes
+    /// back for the next snip.
     fn close_window(&mut self) -> Task<Message> {
         if !self.holding_copy {
             return cosmic::iced::exit();
         }
-        match self.core.set_main_window_id(None) {
-            Some(id) => window::close(id),
+        match self.core.main_window_id() {
+            Some(id) => window::minimize(id, true),
             None => Task::none(),
         }
     }
@@ -317,6 +326,7 @@ impl cosmic::Application for App {
             handoff: flags.handoff,
             capturing: false,
             holding_copy: false,
+            hold: Hold::default(),
             handle,
             doc: Document::default(),
             tool: Tool::Pen,
@@ -343,7 +353,15 @@ impl cosmic::Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        keyboard::listen().map(Message::Key)
+        let keys = keyboard::listen().map(Message::Key);
+        // Only while a freehand stroke is being drawn and is not straight yet.
+        let freehand = matches!(self.tool, Tool::Pen | Tool::Highlighter);
+        if freehand && self.doc.is_drawing() && !self.doc.is_straight() {
+            let tick =
+                cosmic::iced::time::every(std::time::Duration::from_millis(100)).map(Message::Tick);
+            return Subscription::batch([keys, tick]);
+        }
+        keys
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -426,25 +444,45 @@ impl cosmic::Application for App {
             Message::Begin(at) => {
                 let rgba = config::PALETTE[self.color].rgba;
                 self.doc.begin(self.tool, rgba, self.width(), at);
+                self.hold.moved(at, std::time::Instant::now());
             }
-            Message::Extend(at) => self.doc.extend(at),
-            Message::Finish => self.doc.finish(),
+            Message::Extend(at) => {
+                self.doc.extend(at);
+                self.hold.moved(at, std::time::Instant::now());
+            }
+            Message::Finish => {
+                self.doc.finish();
+                self.hold.reset();
+            }
+            Message::Tick(now) => {
+                if self.hold.held(now) {
+                    self.doc.straighten();
+                }
+            }
             Message::Key(event) => return self.key(event),
         }
         Task::none()
     }
 
     fn header_start(&self) -> Vec<Element<'_, Message>> {
-        let mut items: Vec<Element<'_, Message>> = Tool::ALL
-            .iter()
-            .map(|&tool| {
-                button::icon(widget::icon::from_name(tool.icon()))
-                    .selected(tool == self.tool)
-                    .tooltip(format!("{} ({})", tool.label(), tool_hotkey(tool)))
-                    .on_press(Message::Tool(tool))
-                    .into()
-            })
-            .collect();
+        let new = button::standard("New snip")
+            .leading_icon(widget::icon::from_name("list-add-symbolic"))
+            .on_press(Message::New);
+        let mut items: Vec<Element<'_, Message>> = vec![
+            widget::tooltip(
+                new,
+                widget::text::body("New snip (Ctrl+N)"),
+                widget::tooltip::Position::Bottom,
+            )
+            .into(),
+        ];
+        items.extend(Tool::ALL.iter().map(|&tool| {
+            button::icon(widget::icon::from_name(tool.icon()))
+                .selected(tool == self.tool)
+                .tooltip(format!("{} ({})", tool.label(), tool_hotkey(tool)))
+                .on_press(Message::Tool(tool))
+                .into()
+        }));
         items.push(
             widget::divider::vertical::default()
                 .height(Length::Fixed(24.0))
