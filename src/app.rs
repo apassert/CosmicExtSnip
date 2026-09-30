@@ -300,7 +300,20 @@ impl App {
         }
         self.fit_tries += 1;
         self.requested = Some(target);
-        window::resize(id, target)
+        Self::pin_size(id, target)
+    }
+
+    /// Resize and pin: minimum and maximum equal to the size. cosmic-comp treats
+    /// a window whose min size equals its max size as a dialog and floats it
+    /// even on a tiled workspace (cosmic-comp src/shell/layout/mod.rs,
+    /// is_dialog); a tiled editor is stretched to its tile, whatever it asks.
+    /// The limits are lifted first, or the old ones would clamp the new size.
+    fn pin_size(id: window::Id, size: Size) -> Task<Message> {
+        window::set_max_size::<cosmic::Action<Message>>(id, None)
+            .chain(window::set_min_size(id, None))
+            .chain(window::resize(id, size))
+            .chain(window::set_min_size(id, Some(size)))
+            .chain(window::set_max_size(id, Some(size)))
     }
 
     /// Opens a new editor window for the current snip; an open one is focused.
@@ -310,10 +323,13 @@ impl App {
         }
         self.requested = Some(self.window_size());
         self.fit_tries = 0;
+        // Pinned from the first frame (min = max), so the compositor floats it
+        // rather than tiling it: see pin_size.
         let mut settings = window::Settings {
             size: self.window_size(),
-            min_size: Some(Size::new(TOOLBAR_MIN_WIDTH, MIN_WINDOW_HEIGHT)),
-            resizable: true,
+            min_size: Some(self.window_size()),
+            max_size: Some(self.window_size()),
+            resizable: false,
             decorations: false,
             transparent: true,
             exit_on_close_request: false,
@@ -521,7 +537,7 @@ impl cosmic::Application for App {
                     if let Some(id) = self.core.main_window_id() {
                         self.requested = Some(self.window_size());
                         self.fit_tries = 0;
-                        return window::resize(id, self.window_size());
+                        return Self::pin_size(id, self.window_size());
                     }
                 }
                 Err(e) => self.error = Some(format!("the copied snip cannot be read: {e}")),
