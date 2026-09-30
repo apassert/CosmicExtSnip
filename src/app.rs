@@ -56,6 +56,8 @@ pub enum Message {
     /// The portal's copy, read through our window; the attempt number.
     ClipboardImage(Option<clipboard::Png>, u8),
     CloseWindow,
+    /// The window manager asks a window of ours to close.
+    CloseRequested(window::Id),
     /// While drawing freehand: has the pointer been held still long enough?
     Tick(std::time::Instant),
     Exit,
@@ -73,6 +75,12 @@ pub struct App {
     capturing: bool,
     /// A sandboxed copy is being held by this process's window clipboard.
     holding_copy: bool,
+    /// The window iced's clipboard is attached to: the first one opened while
+    /// none was attached. While it holds a copy it is never closed.
+    clip_window: Option<window::Id>,
+    /// An editor was open when the snip started: a cancelled selection brings
+    /// the previous snip back instead of ending the app.
+    reopen_on_cancel: bool,
     /// Hold-to-straighten: where the pointer last moved, and when.
     hold: Hold,
     handle: Handle,
@@ -207,26 +215,44 @@ impl App {
         Task::none()
     }
 
-    /// A new snip: at start, on Ctrl+N, and when the app is launched again. An
-    /// open editor steps aside first so it is not in the picture.
+    /// A new snip: at start, on Ctrl+N, from the New snip button, and when the
+    /// app is launched again. An open editor goes away first so it is not in
+    /// the picture, and a new one opens on the result.
     fn start_capture(&mut self) -> Task<Message> {
         if self.capturing {
             return Task::none();
         }
         self.capturing = true;
-        let open = self.core.main_window_id();
-        let hide = match open {
-            Some(id) => window::minimize(id, true),
-            None => Task::none(),
-        };
+        let away = self.put_editor_away();
+        self.reopen_on_cancel = away.is_some();
+        let wait = away.is_some();
         let capture = cosmic::task::future(async move {
-            if open.is_some() {
+            if wait {
                 // Long enough for the window to be gone before the screen is taken.
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             }
             Message::Captured(crate::capture::request().await)
         });
-        hide.chain(capture)
+        away.unwrap_or_else(Task::none).chain(capture)
+    }
+
+    /// Takes the editor off the screen. Wayland can neither hide a window nor
+    /// bring back a minimised one (winit-wayland: "You can't unminimize the
+    /// window on Wayland"; set_visible: "Not possible on Wayland") - minimising
+    /// it for a new snip left it minimised for good. So the editor is closed,
+    /// and a new one opens later. The one exception is the window holding a
+    /// sandboxed copy: closing it would drop iced's clipboard connection and
+    /// the copy with it, so it is only minimised and stays as it is.
+    fn put_editor_away(&mut self) -> Option<Task<Message>> {
+        let id = self.core.main_window_id()?;
+        self.core.set_main_window_id(None);
+        if self.holding_copy && self.clip_window == Some(id) {
+            return Some(window::minimize(id, true));
+        }
+        if self.clip_window == Some(id) {
+            self.clip_window = None;
+        }
+        Some(window::close(id))
     }
 
     /// The snip plus the header bar, within what fits on a screen.
@@ -237,11 +263,10 @@ impl App {
         )
     }
 
-    /// Opens the editor window for the current snip, or brings the open one back.
-    fn ensure_window(&mut self) -> Task<Message> {
+    /// Opens a new editor window for the current snip; an open one is focused.
+    fn open_editor(&mut self) -> Task<Message> {
         if let Some(id) = self.core.main_window_id() {
-            return window::minimize::<cosmic::Action<Message>>(id, false)
-                .chain(window::gain_focus(id));
+            return window::gain_focus(id);
         }
         let mut settings = window::Settings {
             size: self.window_size(),
@@ -255,24 +280,22 @@ impl App {
         settings.platform_specific.application_id = APP_ID.to_string();
         let (id, opened) = window::open(settings);
         self.core.set_main_window_id(Some(id));
+        // iced attaches its clipboard to a window when it opens one and none is
+        // attached (iced_winit lib.rs, Opened -> Clipboard::connect).
+        if self.clip_window.is_none() {
+            self.clip_window = Some(id);
+        }
         opened.discard()
     }
 
-    /// Esc, the close button and a finished save. The process ends with the
-    /// window unless it holds a sandboxed copy. Then the window is minimised,
-    /// not closed: iced ties its clipboard to a window, and closing the last one
-    /// drops the clipboard connection (iced_winit lib.rs, RemoveWindow ->
-    /// Clipboard::unconnected). With it went the copy - the second Ctrl+C in a
-    /// session "just closed" on the desktop, 2026-09-30. The same window comes
-    /// back for the next snip.
+    /// Esc, the close button and a finished save. The app ends unless it holds
+    /// a sandboxed copy; then the editor goes away (put_editor_away) and the
+    /// process stays, holding it.
     fn close_window(&mut self) -> Task<Message> {
         if !self.holding_copy {
             return cosmic::iced::exit();
         }
-        match self.core.main_window_id() {
-            Some(id) => window::minimize(id, true),
-            None => Task::none(),
-        }
+        self.put_editor_away().unwrap_or_else(Task::none)
     }
 
     /// The portal left the snip on the clipboard and a sandbox can read it only
@@ -331,6 +354,8 @@ impl cosmic::Application for App {
             handoff: flags.handoff,
             capturing: false,
             holding_copy: false,
+            clip_window: None,
+            reopen_on_cancel: false,
             hold: Hold::default(),
             handle,
             doc: Document::default(),
@@ -349,8 +374,18 @@ impl cosmic::Application for App {
         self.start_capture()
     }
 
-    fn on_close_requested(&self, _id: window::Id) -> Option<Message> {
-        Some(Message::CloseWindow)
+    fn on_close_requested(&self, id: window::Id) -> Option<Message> {
+        Some(Message::CloseRequested(id))
+    }
+
+    /// The window that holds a copy, when it is not the editor: minimised, and
+    /// if someone restores it, it says what it is for.
+    fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
+        container(widget::text::body(
+            "Snip is keeping your last copy on the clipboard. Close this window to let it go.",
+        ))
+        .center(Length::Fill)
+        .into()
     }
 
     fn on_escape(&mut self) -> Task<Message> {
@@ -406,29 +441,28 @@ impl cosmic::Application for App {
             Message::New => return self.start_capture(),
             Message::Captured(result) => {
                 self.capturing = false;
-                let open = self.core.main_window_id().is_some();
+                let reopen = std::mem::take(&mut self.reopen_on_cancel);
                 match result {
                     Ok(Some(Grab::Image(snip))) => {
                         self.set_snip(snip);
-                        return self.ensure_window();
+                        return self.open_editor();
                     }
                     Ok(Some(Grab::OnClipboard)) => {
-                        let window = self.ensure_window();
-                        return window.chain(Self::read_clipboard_image(1));
+                        let editor = self.open_editor();
+                        return editor.chain(Self::read_clipboard_image(1));
                     }
-                    Ok(None) if open => return self.ensure_window(),
-                    Ok(None) => return self.close_window(),
-                    Err(e) => {
-                        log::error!("{e}");
-                        self.error = Some(e);
-                        if !open && !self.holding_copy {
+                    Ok(None) | Err(_) => {
+                        if let Err(e) = result {
+                            log::error!("{e}");
+                            self.error = Some(e);
+                        }
+                        // Cancelled from an open editor: the previous snip comes back.
+                        if reopen {
+                            return self.open_editor();
+                        }
+                        if !self.holding_copy {
                             return cosmic::iced::exit();
                         }
-                        return if open {
-                            self.ensure_window()
-                        } else {
-                            Task::none()
-                        };
                     }
                 }
             }
@@ -452,6 +486,23 @@ impl cosmic::Application for App {
                 self.error = Some("the snip was copied, but it could not be read back; take it with Enter instead".into());
             }
             Message::CloseWindow => return self.close_window(),
+            Message::CloseRequested(id) => {
+                if Some(id) == self.core.main_window_id() {
+                    return self.close_window();
+                }
+                if Some(id) == self.clip_window {
+                    // Closed on purpose: the copy goes with it. If an editor is
+                    // open, iced attaches the clipboard to it instead.
+                    self.holding_copy = false;
+                    self.clip_window = self.core.main_window_id();
+                    let close = window::close(id);
+                    if self.clip_window.is_none() {
+                        return close.chain(cosmic::iced::exit());
+                    }
+                    return close;
+                }
+                return window::close(id);
+            }
             Message::Exit => return cosmic::iced::exit(),
             Message::Begin(at) => {
                 let rgba = config::PALETTE[self.color].rgba;

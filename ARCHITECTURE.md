@@ -21,7 +21,7 @@ cosmic-ext-snip
         Copy  → render::composite → PNG → hand-off → window closes → main serves it
         Save  → portal file chooser → render::composite → write → exit
         Esc   → exit
-        Ctrl+N → window minimised → portal again → same window, new snip
+        Ctrl+N → editor closed → portal again → a new editor window on the result
 ```
 
 ## Why the portal draws the selection
@@ -60,13 +60,22 @@ depends on where the app runs:
   protocol) until another client takes the clipboard.
 - **In a Flatpak sandbox:** COSMIC hides the data-control protocols from
   sandboxed clients, so the only clipboard is the window's own. Ctrl+C writes
-  `image/png` through the window and minimises it - not closes it: iced ties
-  its clipboard to a window, and closing the last window drops the clipboard
-  connection and the copy with it. The same window comes back for the next
-  snip. A `clipboard:///` answer from the portal is read the same way, once
+  `image/png` through the window. iced ties its clipboard to one window, and
+  closing that window drops the connection and the copy with it, so while a
+  copy is held that window is minimised, never closed; if restored, it says
+  what it is for. Closing it on purpose lets the copy go. A `clipboard:///` answer from the portal is read the same way, once
   the editor window has focus.
 
 The app starts with no window - the snip is taken first, so the editor is
 never in its own picture - and it is a single instance: launching it again,
 like Ctrl+N, takes a new snip in the running process. That is what lets a
 sandboxed copy survive: there is only ever one process, and it is still there.
+
+## Windows on Wayland
+
+A Wayland client can neither hide a window nor un-minimise one (winit-wayland:
+"You can't unminimize the window on Wayland"; `set_visible`: "Not possible on
+Wayland"). So an editor that has to leave the screen for a new snip is closed,
+and a new window opens on the result; a cancelled selection reopens the
+previous snip. The only window that is minimised instead is the one holding a
+sandboxed copy (above).
