@@ -9,11 +9,14 @@ use cosmic_ext_snip::clipboard;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Snip a region of the screen and annotate it")]
-struct Args {}
+struct Args {
+    /// Annotate this PNG instead of taking a snip.
+    file: Option<std::path::PathBuf>,
+}
 
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    let _args = Args::parse();
+    let args = Args::parse();
 
     // No window until the snip is taken (app.rs), and one process: launched
     // again, it asks the running one for a new snip and exits. The process does
@@ -27,6 +30,7 @@ fn main() -> ExitCode {
         settings,
         Flags {
             handoff: handoff.clone(),
+            open: args.file,
         },
     );
     if let Err(e) = result {

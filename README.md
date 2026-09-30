@@ -41,6 +41,7 @@ other documents. The icon is the original CosmicSnip artwork. Releases before
   highlighter and the stroke becomes a straight line from where it started;
   it then follows the pointer until you let go - as in the Windows Snipping Tool
 - A **New snip** button (and `Ctrl+N`) to select another region
+- `cosmic-ext-snip image.png` annotates an existing image instead of taking a snip
 - 6-colour palette and adjustable stroke width
 - Undo (`Ctrl+Z`, up to 200 steps)
 - Remembers your colour and stroke widths for the next snip; every snip starts with the pen

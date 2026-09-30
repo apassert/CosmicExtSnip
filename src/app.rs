@@ -42,6 +42,8 @@ const MAX_WINDOW: Size = Size::new(2560.0, 1360.0);
 pub struct Flags {
     /// Where a copy is left for `main` to serve after the app exits (outside a sandbox).
     pub handoff: clipboard::Handoff,
+    /// An image to annotate instead of taking a snip.
+    pub open: Option<PathBuf>,
 }
 
 impl cosmic::app::CosmicFlags for Flags {
@@ -70,6 +72,8 @@ pub enum Message {
     /// What the canvas really got on its first frame: the window is then
     /// corrected by the difference so the snip shows at exactly 1:1.
     CanvasSize(Size),
+    /// Debug only (COSMIC_EXT_SNIP_DUMP): the window's own rendering, alpha included.
+    Dumped(window::Screenshot),
     /// While drawing freehand: has the pointer been held still long enough?
     Tick(std::time::Instant),
     Exit,
@@ -377,6 +381,11 @@ impl App {
     }
 }
 
+/// Debug only: where to save the window's own rendering once, then exit.
+fn dump_path() -> Option<PathBuf> {
+    std::env::var_os("COSMIC_EXT_SNIP_DUMP").map(PathBuf::from)
+}
+
 /// The on-screen image: straight RGBA, as the snip's pixels are premultiplied.
 fn handle_for(snip: &Pixmap) -> Handle {
     let mut rgba = Vec::with_capacity(snip.data().len());
@@ -428,7 +437,22 @@ impl cosmic::Application for App {
         // The snip runs edge to edge under the header: no padded content box,
         // so the window can be exactly the snip plus the header.
         app.core.window.content_container = false;
-        let first = app.start_capture();
+        let first = match flags.open {
+            Some(path) => match std::fs::read(&path)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))
+                .and_then(|bytes| render::decode_png(&bytes))
+            {
+                Ok(snip) => {
+                    app.set_snip(snip);
+                    app.open_editor()
+                }
+                Err(e) => {
+                    log::error!("{e}");
+                    cosmic::iced::exit()
+                }
+            },
+            None => app.start_capture(),
+        };
         (app, first)
     }
 
@@ -551,7 +575,33 @@ impl cosmic::Application for App {
                 self.error = Some("the snip was copied, but it could not be read back; take it with Enter instead".into());
             }
             Message::CloseWindow => return self.close_window(),
-            Message::CanvasSize(size) => return self.fit_to_snip(size),
+            Message::CanvasSize(size) => {
+                let fit = self.fit_to_snip(size);
+                // Debug: once the window has settled, save what it rendered.
+                if let (Some(id), Some(_)) = (self.core.main_window_id(), dump_path()) {
+                    let shot = cosmic::iced::Task::future(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+                    })
+                    .discard()
+                    .chain(window::screenshot(id).map(|s| cosmic::Action::App(Message::Dumped(s))));
+                    return fit.chain(shot);
+                }
+                return fit;
+            }
+            Message::Dumped(shot) => {
+                if let Some(path) = dump_path() {
+                    let written = tiny_skia::Pixmap::from_vec(
+                        shot.rgba.to_vec(),
+                        tiny_skia::IntSize::from_wh(shot.size.width, shot.size.height)
+                            .expect("a window has a size"),
+                    )
+                    .ok_or_else(|| "screenshot is not RGBA of its size".to_string())
+                    .and_then(|p| render::encode_png(&p))
+                    .and_then(|png| std::fs::write(&path, png).map_err(|e| e.to_string()));
+                    log::warn!("dumped the window to {}: {written:?}", path.display());
+                    return cosmic::iced::exit();
+                }
+            }
             Message::CloseRequested(id) => {
                 if Some(id) == self.core.main_window_id() {
                     return self.close_window();
