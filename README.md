@@ -37,6 +37,10 @@ other documents. The icon is the original CosmicSnip artwork. Releases before
 
 **Annotate**
 - Pen, highlighter, arrow, rectangle
+- Hold the pointer still for a second while drawing with the pen or
+  highlighter and the stroke becomes a straight line from where it started;
+  it then follows the pointer until you let go - as in the Windows Snipping Tool
+- A **New snip** button (and `Ctrl+N`) to select another region
 - 6-colour palette and adjustable stroke width
 - Undo (`Ctrl+Z`, up to 200 steps)
 - Remembers your colour and stroke widths for the next snip; every snip starts with the pen

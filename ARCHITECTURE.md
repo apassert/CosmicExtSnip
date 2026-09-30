@@ -60,8 +60,10 @@ depends on where the app runs:
   protocol) until another client takes the clipboard.
 - **In a Flatpak sandbox:** COSMIC hides the data-control protocols from
   sandboxed clients, so the only clipboard is the window's own. Ctrl+C writes
-  `image/png` through the window, closes the window and keeps the process
-  running. A `clipboard:///` answer from the portal is read the same way, once
+  `image/png` through the window and minimises it - not closes it: iced ties
+  its clipboard to a window, and closing the last window drops the clipboard
+  connection and the copy with it. The same window comes back for the next
+  snip. A `clipboard:///` answer from the portal is read the same way, once
   the editor window has focus.
 
 The app starts with no window - the snip is taken first, so the editor is
