@@ -229,6 +229,14 @@ impl App {
         hide.chain(capture)
     }
 
+    /// The snip plus the header bar, within what fits on a screen.
+    fn window_size(&self) -> Size {
+        Size::new(
+            (self.snip.width() as f32).clamp(560.0, 1600.0),
+            (self.snip.height() as f32 + 56.0).clamp(360.0, 1000.0),
+        )
+    }
+
     /// Opens the editor window for the current snip, or brings the open one back.
     fn ensure_window(&mut self) -> Task<Message> {
         if let Some(id) = self.core.main_window_id() {
@@ -236,10 +244,7 @@ impl App {
                 .chain(window::gain_focus(id));
         }
         let mut settings = window::Settings {
-            size: Size::new(
-                (self.snip.width() as f32).clamp(560.0, 1600.0),
-                (self.snip.height() as f32 + 56.0).clamp(360.0, 1000.0),
-            ),
+            size: self.window_size(),
             min_size: Some(Size::new(560.0, 360.0)),
             resizable: true,
             decorations: false,
@@ -428,7 +433,14 @@ impl cosmic::Application for App {
                 }
             }
             Message::ClipboardImage(Some(png), _) => match crate::render::decode_png(&png.0) {
-                Ok(snip) => self.set_snip(snip),
+                Ok(snip) => {
+                    self.set_snip(snip);
+                    // The window opened before its size was known (the snip was
+                    // still on the clipboard); fit it to the snip now.
+                    if let Some(id) = self.core.main_window_id() {
+                        return window::resize(id, self.window_size());
+                    }
+                }
                 Err(e) => self.error = Some(format!("the copied snip cannot be read: {e}")),
             },
             // The window may not have the keyboard yet; the clipboard is only
