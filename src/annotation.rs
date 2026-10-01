@@ -15,10 +15,20 @@ pub enum Tool {
     Highlighter,
     Arrow,
     Rect,
+    /// An ellipse inside the rectangle that was dragged.
+    Circle,
+    Text,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 4] = [Tool::Pen, Tool::Highlighter, Tool::Arrow, Tool::Rect];
+    pub const ALL: [Tool; 6] = [
+        Tool::Pen,
+        Tool::Highlighter,
+        Tool::Arrow,
+        Tool::Rect,
+        Tool::Circle,
+        Tool::Text,
+    ];
 
     /// CosmicSnip's single-key shortcuts: P, H, A, R.
     pub fn from_hotkey(c: char) -> Option<Tool> {
@@ -27,6 +37,8 @@ impl Tool {
             'h' => Some(Tool::Highlighter),
             'a' => Some(Tool::Arrow),
             'r' => Some(Tool::Rect),
+            'c' => Some(Tool::Circle),
+            't' => Some(Tool::Text),
             _ => None,
         }
     }
@@ -37,6 +49,8 @@ impl Tool {
             Tool::Highlighter => "Highlighter (H)",
             Tool::Arrow => "Arrow (A)",
             Tool::Rect => "Rectangle (R)",
+            Tool::Circle => "Circle (C)",
+            Tool::Text => "Text (T)",
         }
     }
 
@@ -46,6 +60,8 @@ impl Tool {
             Tool::Highlighter => "format-text-highlight-symbolic",
             Tool::Arrow => "go-next-symbolic",
             Tool::Rect => "checkbox-symbolic",
+            Tool::Circle => "radio-symbolic",
+            Tool::Text => "insert-text-symbolic",
         }
     }
 }
@@ -75,6 +91,18 @@ pub enum Shape {
         start: Point,
         end: Point,
     },
+    /// The ellipse inscribed in the rectangle from `start` to `end`.
+    Ellipse {
+        start: Point,
+        end: Point,
+    },
+    /// One line of text whose top-left corner is `at`, `size` snip pixels high,
+    /// in the desktop's interface font.
+    Text {
+        at: Point,
+        text: String,
+        size: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -91,7 +119,10 @@ impl Stroke {
     fn is_visible(&self) -> bool {
         match &self.shape {
             Shape::Path(points) => points.len() >= 2,
-            Shape::Arrow { start, end } | Shape::Rect { start, end } => start != end,
+            Shape::Arrow { start, end }
+            | Shape::Rect { start, end }
+            | Shape::Ellipse { start, end } => start != end,
+            Shape::Text { text, .. } => !text.trim().is_empty(),
         }
     }
 }
@@ -130,6 +161,13 @@ impl Document {
             Tool::Pen | Tool::Highlighter => Shape::Path(vec![at]),
             Tool::Arrow => Shape::Arrow { start: at, end: at },
             Tool::Rect => Shape::Rect { start: at, end: at },
+            Tool::Circle => Shape::Ellipse { start: at, end: at },
+            // For text, the width is the text's height in snip pixels.
+            Tool::Text => Shape::Text {
+                at,
+                text: String::new(),
+                size: width,
+            },
         };
         self.current = Some(Stroke { shape, rgba, width });
         self.straight = false;
@@ -180,7 +218,11 @@ impl Document {
                     points.push(at);
                 }
             }
-            Shape::Arrow { end, .. } | Shape::Rect { end, .. } => *end = at,
+            Shape::Arrow { end, .. } | Shape::Rect { end, .. } | Shape::Ellipse { end, .. } => {
+                *end = at
+            }
+            // Text is placed by a click, not dragged.
+            Shape::Text { .. } => {}
         }
     }
 
@@ -196,6 +238,44 @@ impl Document {
                 }
             }
         }
+    }
+
+    /// Text is being typed into the stroke in progress.
+    pub fn is_typing(&self) -> bool {
+        matches!(
+            self.current,
+            Some(Stroke {
+                shape: Shape::Text { .. },
+                ..
+            })
+        )
+    }
+
+    /// Type into the text being written. Control characters are not text.
+    pub fn type_text(&mut self, typed: &str) {
+        if let Some(Stroke {
+            shape: Shape::Text { text, .. },
+            ..
+        }) = self.current.as_mut()
+        {
+            text.extend(typed.chars().filter(|c| !c.is_control()));
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if let Some(Stroke {
+            shape: Shape::Text { text, .. },
+            ..
+        }) = self.current.as_mut()
+        {
+            text.pop();
+        }
+    }
+
+    /// Drop the stroke in progress without keeping it.
+    pub fn cancel(&mut self) {
+        self.current = None;
+        self.straight = false;
     }
 
     pub fn is_drawing(&self) -> bool {
@@ -387,5 +467,66 @@ mod tests {
         assert!(h.held(ms(2100)));
         h.reset();
         assert!(!h.held(ms(5000)));
+    }
+
+    #[test]
+    fn a_circle_is_the_ellipse_in_the_dragged_rectangle() {
+        let mut d = Document::default();
+        d.begin(
+            Tool::Circle,
+            [0.0, 0.0, 1.0, 1.0],
+            3.0,
+            Point::new(10.0, 10.0),
+        );
+        d.extend(Point::new(50.0, 30.0));
+        d.finish();
+        assert_eq!(
+            d.committed()[0].shape,
+            Shape::Ellipse {
+                start: Point::new(10.0, 10.0),
+                end: Point::new(50.0, 30.0)
+            }
+        );
+    }
+
+    #[test]
+    fn text_is_typed_corrected_and_committed_and_empty_text_is_not_kept() {
+        let mut d = Document::default();
+        d.begin(Tool::Text, [1.0, 0.0, 0.0, 1.0], 24.0, Point::new(5.0, 5.0));
+        assert!(d.is_typing());
+        d.type_text("Helo");
+        d.backspace();
+        d.type_text("lo!\u{8}");
+        d.extend(Point::new(99.0, 99.0)); // a drag does not move text
+        d.finish();
+        assert!(!d.is_typing());
+        assert_eq!(
+            d.committed()[0].shape,
+            Shape::Text {
+                at: Point::new(5.0, 5.0),
+                text: "Hello!".into(),
+                size: 24.0
+            }
+        );
+        d.begin(Tool::Text, [1.0; 4], 24.0, Point::new(0.0, 0.0));
+        d.type_text("   ");
+        d.finish();
+        assert_eq!(d.committed().len(), 1, "blank text leaves no undo step");
+    }
+
+    #[test]
+    fn cancelling_text_keeps_nothing() {
+        let mut d = Document::default();
+        d.begin(Tool::Text, [1.0; 4], 24.0, Point::new(0.0, 0.0));
+        d.type_text("abc");
+        d.cancel();
+        assert!(!d.is_drawing());
+        assert!(d.committed().is_empty());
+    }
+
+    #[test]
+    fn the_new_tools_have_hotkeys() {
+        assert_eq!(Tool::from_hotkey('c'), Some(Tool::Circle));
+        assert_eq!(Tool::from_hotkey('T'), Some(Tool::Text));
     }
 }

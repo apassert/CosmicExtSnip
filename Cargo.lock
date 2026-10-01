@@ -1024,6 +1024,7 @@ name = "cosmic-ext-snip"
 version = "2.0.0"
 dependencies = [
  "clap",
+ "cosmic-text",
  "dirs",
  "env_logger",
  "jiff",

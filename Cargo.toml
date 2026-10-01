@@ -9,6 +9,9 @@ rust-version = "1.85"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+# Text in the exported PNG: the engine COSMIC renders text with, already in
+# the tree through iced.
+cosmic-text = "0.19"
 dirs = "6"
 jiff = "0.2"
 log = "0.4"

@@ -36,7 +36,10 @@ other documents. The icon is the original CosmicSnip artwork. Releases before
 - `Enter` takes it, `Esc` cancels and the app exits
 
 **Annotate**
-- Pen, highlighter, arrow, rectangle
+- Pen, highlighter, arrow, rectangle, circle (ellipse) and text
+- Text: click where it goes and type; it is drawn in the selected colour and
+  in COSMIC's interface font. `Enter` or a click elsewhere keeps it, `Esc`
+  drops it, `+` / `-` set the size of the next text
 - Hold the pointer still for a second while drawing with the pen or
   highlighter and the stroke becomes a straight line from where it started;
   it then follows the pointer until you let go - as in the Windows Snipping Tool
@@ -44,7 +47,7 @@ other documents. The icon is the original CosmicSnip artwork. Releases before
 - `cosmic-ext-snip image.png` annotates an existing image instead of taking a snip
 - 6-colour palette and adjustable stroke width
 - Undo (`Ctrl+Z`, up to 200 steps)
-- Remembers your colour and stroke widths for the next snip; every snip starts with the pen
+- Remembers your colour, stroke widths and text size for the next snip; every snip starts with the pen
 
 **Output**
 - `Ctrl+C` copies the annotated snip at full resolution and closes; it stays
@@ -55,8 +58,8 @@ other documents. The icon is the original CosmicSnip artwork. Releases before
 
 | Key | Action |
 |-----|--------|
-| `P` `H` `A` `R` | Pen / Highlighter / Arrow / Rectangle |
-| `+` / `-` | Thicker / thinner stroke |
+| `P` `H` `A` `R` `C` `T` | Pen / Highlighter / Arrow / Rectangle / Circle / Text |
+| `+` / `-` | Thicker / thinner stroke, larger / smaller text |
 | `Ctrl+C` | Copy to the clipboard and close |
 | `Ctrl+S` | Save as PNG and close |
 | `Ctrl+Z` | Undo |

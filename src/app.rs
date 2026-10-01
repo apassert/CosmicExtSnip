@@ -67,6 +67,8 @@ pub enum Message {
     /// The portal's copy, read through our window; the attempt number.
     ClipboardImage(Option<clipboard::Png>, u8),
     CloseWindow,
+    /// The Text tool: a click places a text cursor there.
+    PlaceText(Point),
     /// The window manager asks a window of ours to close.
     CloseRequested(window::Id),
     /// What the canvas really got on its first frame: the window is then
@@ -107,6 +109,8 @@ pub struct App {
     color: usize,
     pen_width: f32,
     highlight_width: f32,
+    /// Text height in snip pixels.
+    text_size: f32,
     error: Option<String>,
 }
 
@@ -114,6 +118,7 @@ impl App {
     fn width(&self) -> f32 {
         match self.tool {
             Tool::Highlighter => self.highlight_width,
+            Tool::Text => self.text_size,
             _ => self.pen_width,
         }
     }
@@ -124,6 +129,7 @@ impl App {
             color: self.color,
             pen_width: self.pen_width,
             highlight_width: self.highlight_width,
+            text_size: self.text_size,
         };
         if let Err(e) = prefs.store() {
             log::warn!("{e}");
@@ -136,6 +142,10 @@ impl App {
                 self.highlight_width = (self.highlight_width + 4.0 * delta)
                     .clamp(config::HIGHLIGHT_WIDTH_MIN, config::HIGHLIGHT_WIDTH_MAX);
             }
+            Tool::Text => {
+                self.text_size = (self.text_size + 4.0 * delta)
+                    .clamp(config::TEXT_SIZE_MIN, config::TEXT_SIZE_MAX);
+            }
             _ => {
                 self.pen_width =
                     (self.pen_width + delta).clamp(config::PEN_WIDTH_MIN, config::PEN_WIDTH_MAX);
@@ -145,8 +155,18 @@ impl App {
     }
 
     /// The snip with every committed stroke, at the snip's own resolution.
-    fn export(&self) -> Result<Vec<u8>, String> {
-        render::encode_png(&render::composite(&self.snip, self.doc.committed()))
+    /// Text in the desktop's interface font, the one the editor showed it in.
+    fn export(&mut self) -> Result<Vec<u8>, String> {
+        // Text still being typed is part of what the user sees: keep it.
+        if self.doc.is_typing() {
+            self.doc.finish();
+        }
+        let family = cosmic::config::interface_font().family;
+        render::encode_png(&render::composite_with_font(
+            &self.snip,
+            self.doc.committed(),
+            Some(&family),
+        ))
     }
 
     fn copy_and_exit(&mut self) -> Task<Message> {
@@ -196,9 +216,40 @@ impl App {
     }
 
     fn key(&mut self, event: keyboard::Event) -> Task<Message> {
-        let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
+        let keyboard::Event::KeyPressed {
+            key,
+            modifiers,
+            text,
+            ..
+        } = event
+        else {
             return Task::none();
         };
+        // Typing text: keys are text, not tools. Esc drops it, Enter keeps it,
+        // and a shortcut with Ctrl keeps it and then does what it does.
+        if self.doc.is_typing() {
+            match &key {
+                Key::Named(Named::Escape) => {
+                    self.doc.cancel();
+                    return Task::none();
+                }
+                Key::Named(Named::Enter) => {
+                    self.doc.finish();
+                    return Task::none();
+                }
+                Key::Named(Named::Backspace) => {
+                    self.doc.backspace();
+                    return Task::none();
+                }
+                _ if modifiers.control() => self.doc.finish(),
+                _ => {
+                    if let Some(typed) = text {
+                        self.doc.type_text(&typed);
+                    }
+                    return Task::none();
+                }
+            }
+        }
         if let Key::Named(Named::Escape) = key {
             return self.close_window();
         }
@@ -430,6 +481,7 @@ impl cosmic::Application for App {
             color: prefs.color,
             pen_width: prefs.pen_width,
             highlight_width: prefs.highlight_width,
+            text_size: prefs.text_size,
             error: None,
         };
         // The snip runs edge to edge under the header: no padded content box,
@@ -473,8 +525,11 @@ impl cosmic::Application for App {
         .into()
     }
 
+    /// Esc is handled with the other keys (App::key), where it can tell typed
+    /// text from the editor: handling it here too would close the window the
+    /// moment Esc dropped the text.
     fn on_escape(&mut self) -> Task<Message> {
-        self.close_window()
+        Task::none()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -491,7 +546,20 @@ impl cosmic::Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Tool(tool) => self.tool = tool,
+            Message::Tool(tool) => {
+                if self.doc.is_typing() {
+                    self.doc.finish();
+                }
+                self.tool = tool;
+            }
+            Message::PlaceText(at) => {
+                // A click elsewhere keeps the text being typed and starts new text.
+                if self.doc.is_typing() {
+                    self.doc.finish();
+                }
+                let rgba = config::PALETTE[self.color].rgba;
+                self.doc.begin(Tool::Text, rgba, self.text_size, at);
+            }
             Message::Color(i) => {
                 self.color = i.min(config::PALETTE.len() - 1);
                 self.remember();
@@ -648,7 +716,7 @@ impl cosmic::Application for App {
         items.extend(Tool::ALL.iter().map(|&tool| {
             button::icon(widget::icon::from_name(tool.icon()))
                 .selected(tool == self.tool)
-                .tooltip(format!("{} ({})", tool.label(), tool_hotkey(tool)))
+                .tooltip(tool.label())
                 .on_press(Message::Tool(tool))
                 .into()
         }));
@@ -707,15 +775,6 @@ impl cosmic::Application for App {
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
-    }
-}
-
-fn tool_hotkey(tool: Tool) -> char {
-    match tool {
-        Tool::Pen => 'P',
-        Tool::Highlighter => 'H',
-        Tool::Arrow => 'A',
-        Tool::Rect => 'R',
     }
 }
 
@@ -842,6 +901,10 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
             )
         };
         match event {
+            mouse::Event::ButtonPressed(mouse::Button::Left) if self.app.tool == Tool::Text => {
+                let p = cursor.position_in(bounds)?;
+                Some(canvas::Action::publish(Message::PlaceText(at(p))).and_capture())
+            }
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 let p = cursor.position_in(bounds)?;
                 state.drawing = true;
@@ -873,8 +936,10 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
     ) -> Vec<Geometry> {
         let fit = self.fit(bounds);
         let mut frame = Frame::new(renderer, bounds.size());
-        for stroke in self.app.doc.all() {
-            draw_stroke(&mut frame, &fit, stroke);
+        let committed = self.app.doc.committed().len();
+        let typing = self.app.doc.is_typing();
+        for (i, stroke) in self.app.doc.all().enumerate() {
+            draw_stroke(&mut frame, &fit, stroke, typing && i >= committed);
         }
         vec![frame.into_geometry()]
     }
@@ -885,7 +950,9 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if cursor.is_over(bounds) {
+        if cursor.is_over(bounds) && self.app.tool == Tool::Text {
+            mouse::Interaction::Text
+        } else if cursor.is_over(bounds) {
             mouse::Interaction::Crosshair
         } else {
             mouse::Interaction::default()
@@ -893,15 +960,37 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
     }
 }
 
-fn draw_stroke(frame: &mut Frame, fit: &Fit, stroke: &Stroke) {
+fn draw_stroke(frame: &mut Frame, fit: &Fit, stroke: &Stroke, typing: bool) {
     // A shape with no extent draws nothing, and the renderer logs a warning for
     // every such path on every frame ("empty paths and horizontal/vertical lines
     // cannot be filled"): the first point of a stroke, an arrow not yet dragged.
     let degenerate = match &stroke.shape {
         Shape::Path(points) => points.windows(2).all(|w| w[0] == w[1]),
-        Shape::Arrow { start, end } | Shape::Rect { start, end } => start == end,
+        Shape::Arrow { start, end }
+        | Shape::Rect { start, end }
+        | Shape::Ellipse { start, end } => start == end,
+        Shape::Text { .. } => false,
     };
     if degenerate {
+        return;
+    }
+    if let Shape::Text { at, text, size } = &stroke.shape {
+        // The same font and line height the export uses (render.rs), so the
+        // text lands where it was shown. While it is being typed, a cursor.
+        let content = if typing {
+            format!("{text}|")
+        } else {
+            text.clone()
+        };
+        frame.fill_text(canvas::Text {
+            content,
+            position: fit.to_canvas(*at),
+            color: to_color(stroke.rgba),
+            size: cosmic::iced::Pixels(size * fit.scale),
+            line_height: cosmic::iced::widget::text::LineHeight::Relative(render::TEXT_LINE_HEIGHT),
+            font: cosmic::font::default(),
+            ..canvas::Text::default()
+        });
         return;
     }
     let style = IStroke::default()
@@ -938,6 +1027,18 @@ fn draw_stroke(frame: &mut Frame, fit: &Fit, stroke: &Stroke) {
             b.line_to(IPoint::new(a.x, c.y));
             b.close();
         }
+        Shape::Ellipse { start, end } => {
+            let a = fit.to_canvas(*start);
+            let c = fit.to_canvas(*end);
+            b.ellipse(canvas::path::arc::Elliptical {
+                center: IPoint::new((a.x + c.x) / 2.0, (a.y + c.y) / 2.0),
+                radii: cosmic::iced::Vector::new((c.x - a.x).abs() / 2.0, (c.y - a.y).abs() / 2.0),
+                rotation: cosmic::iced::Radians(0.0),
+                start_angle: cosmic::iced::Radians(0.0),
+                end_angle: cosmic::iced::Radians(std::f32::consts::TAU),
+            });
+        }
+        Shape::Text { .. } => {}
     });
     frame.stroke(&path, style);
 }
