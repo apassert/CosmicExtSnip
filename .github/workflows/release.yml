@@ -1,0 +1,138 @@
+name: Release
+
+# A tag v<version> publishes a GitHub release. Flathub builds from the tag
+# itself (its manifest names the tag and commit); what this adds is the check
+# that the tag, Cargo.toml, Cargo.lock, the metainfo and the CHANGELOG agree
+# (scripts/release-check.sh), the full gate on the tagged tree, an x86_64
+# build, and cargo-sources.json for the Flathub manifest.
+#
+# Run it by hand (Actions -> Release -> Run workflow) to try the pipeline
+# without releasing: on a self-hosted runner labelled `cosmicsnip-release`,
+# and with `draft` to exercise the publishing step on a draft nobody else sees.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Where the jobs run
+        type: choice
+        options: [github-hosted, self-hosted]
+        default: github-hosted
+      publish:
+        description: none = artifacts only; draft = also a draft release
+        type: choice
+        options: [none, draft]
+        default: none
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Both runners run the job in the same container, so a trial on a local
+    # runner tests what a tag will run, and the job sees only its checkout -
+    # never the runner user's files or keys.
+    runs-on: ${{ inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "cosmicsnip-release"]') || 'ubuntu-24.04' }}
+    container: ubuntu:24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Tools and the system libraries libcosmic links against
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config \
+            libxkbcommon-dev libwayland-dev libfontconfig-dev libfreetype-dev libexpat1-dev \
+            appstream desktop-file-utils \
+            python3 python3-aiohttp python3-tomlkit python3-yaml
+
+      - uses: actions/checkout@v4
+
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Versions agree
+        id: check
+        run: |
+          version=$(scripts/release-check.sh release-notes.md)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Metadata validates
+        run: |
+          appstreamcli validate --no-net data/io.github.apassert.CosmicExtSnip.metainfo.xml
+          desktop-file-validate data/io.github.apassert.CosmicExtSnip.desktop
+
+      - name: Rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Build and package
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          cargo build --release --locked
+          root="cosmic-ext-snip-$VERSION-x86_64-linux"
+          appid=io.github.apassert.CosmicExtSnip
+          install -Dm0755 target/release/cosmic-ext-snip "$root/bin/cosmic-ext-snip"
+          install -Dm0644 "data/$appid.desktop" "$root/share/applications/$appid.desktop"
+          install -Dm0644 "data/icons/hicolor/scalable/apps/$appid.svg" "$root/share/icons/hicolor/scalable/apps/$appid.svg"
+          install -Dm0644 "data/$appid.metainfo.xml" "$root/share/metainfo/$appid.metainfo.xml"
+          install -Dm0644 LICENSE "$root/LICENSE"
+          mkdir dist
+          tar -czf "dist/$root.tar.gz" "$root"
+
+      - name: cargo-sources.json for the Flathub manifest
+        # flatpak-builder-tools' own generator, pinned to a commit.
+        run: |
+          curl -sSfL -o flatpak-cargo-generator.py \
+            https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/41c20aa10819cdb2a4f3ca171758a96d1955c018/cargo/flatpak-cargo-generator.py
+          python3 flatpak-cargo-generator.py Cargo.lock -o dist/cargo-sources.json
+          cd dist && sha256sum ./* > SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            dist/
+            release-notes.md
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag' || inputs.publish == 'draft'
+    runs-on: ${{ inputs.runner == 'self-hosted' && fromJSON('["self-hosted", "cosmicsnip-release"]') || 'ubuntu-24.04' }}
+    container: ubuntu:24.04
+    permissions:
+      contents: write
+    steps:
+      - name: gh
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates gh
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag \
+              --title "Snip for COSMIC $VERSION" --notes-file release-notes.md dist/*
+          else
+            # A draft does not create its tag until it is published.
+            gh release create "v$VERSION" --draft --target "$GITHUB_SHA" \
+              --title "Snip for COSMIC $VERSION (trial)" --notes-file release-notes.md dist/*
+          fi
