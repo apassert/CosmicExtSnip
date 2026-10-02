@@ -15,10 +15,20 @@ pub enum Tool {
     Highlighter,
     Arrow,
     Rect,
+    /// An ellipse inside the rectangle that was dragged.
+    Circle,
+    Text,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 4] = [Tool::Pen, Tool::Highlighter, Tool::Arrow, Tool::Rect];
+    pub const ALL: [Tool; 6] = [
+        Tool::Pen,
+        Tool::Highlighter,
+        Tool::Arrow,
+        Tool::Rect,
+        Tool::Circle,
+        Tool::Text,
+    ];
 
     /// CosmicSnip's single-key shortcuts: P, H, A, R.
     pub fn from_hotkey(c: char) -> Option<Tool> {
@@ -27,6 +37,8 @@ impl Tool {
             'h' => Some(Tool::Highlighter),
             'a' => Some(Tool::Arrow),
             'r' => Some(Tool::Rect),
+            'c' => Some(Tool::Circle),
+            't' => Some(Tool::Text),
             _ => None,
         }
     }
@@ -37,6 +49,8 @@ impl Tool {
             Tool::Highlighter => "Highlighter (H)",
             Tool::Arrow => "Arrow (A)",
             Tool::Rect => "Rectangle (R)",
+            Tool::Circle => "Circle (C)",
+            Tool::Text => "Text (T)",
         }
     }
 
@@ -46,6 +60,8 @@ impl Tool {
             Tool::Highlighter => "format-text-highlight-symbolic",
             Tool::Arrow => "go-next-symbolic",
             Tool::Rect => "checkbox-symbolic",
+            Tool::Circle => "radio-symbolic",
+            Tool::Text => "insert-text-symbolic",
         }
     }
 }
@@ -75,6 +91,18 @@ pub enum Shape {
         start: Point,
         end: Point,
     },
+    /// The ellipse inscribed in the rectangle from `start` to `end`.
+    Ellipse {
+        start: Point,
+        end: Point,
+    },
+    /// One line of text whose top-left corner is `at`, `size` snip pixels high,
+    /// in the desktop's interface font.
+    Text {
+        at: Point,
+        text: String,
+        size: f32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -91,7 +119,10 @@ impl Stroke {
     fn is_visible(&self) -> bool {
         match &self.shape {
             Shape::Path(points) => points.len() >= 2,
-            Shape::Arrow { start, end } | Shape::Rect { start, end } => start != end,
+            Shape::Arrow { start, end }
+            | Shape::Rect { start, end }
+            | Shape::Ellipse { start, end } => start != end,
+            Shape::Text { text, .. } => !text.trim().is_empty(),
         }
     }
 }
@@ -113,6 +144,10 @@ pub fn arrow_barbs(start: Point, end: Point, width: f32) -> [Point; 2] {
 pub struct Document {
     strokes: Vec<Stroke>,
     current: Option<Stroke>,
+    /// The stroke in progress was straightened by holding still: a freehand
+    /// stroke is now a line whose far end follows the pointer, an ellipse is now
+    /// a circle.
+    straight: bool,
 }
 
 impl Document {
@@ -127,8 +162,54 @@ impl Document {
             Tool::Pen | Tool::Highlighter => Shape::Path(vec![at]),
             Tool::Arrow => Shape::Arrow { start: at, end: at },
             Tool::Rect => Shape::Rect { start: at, end: at },
+            Tool::Circle => Shape::Ellipse { start: at, end: at },
+            // For text, the width is the text's height in snip pixels.
+            Tool::Text => Shape::Text {
+                at,
+                text: String::new(),
+                size: width,
+            },
         };
         self.current = Some(Stroke { shape, rgba, width });
+        self.straight = false;
+    }
+
+    /// Hold still while drawing freehand, and the stroke becomes a straight line
+    /// from where it started to where the pointer is - as the Windows Snipping
+    /// Tool does. Hold still while drawing an ellipse, and it becomes a circle.
+    /// Returns whether it changed.
+    pub fn straighten(&mut self) -> bool {
+        if self.straight {
+            return false;
+        }
+        let Some(stroke) = self.current.as_mut() else {
+            return false;
+        };
+        match &mut stroke.shape {
+            Shape::Path(points) => {
+                if points.len() < 2 {
+                    return false;
+                }
+                let (first, last) = (points[0], points[points.len() - 1]);
+                if first == last {
+                    return false;
+                }
+                *points = vec![first, last];
+            }
+            Shape::Ellipse { start, end } => {
+                if start == end {
+                    return false;
+                }
+                *end = circle_corner(*start, *end);
+            }
+            _ => return false,
+        }
+        self.straight = true;
+        true
+    }
+
+    pub fn is_straight(&self) -> bool {
+        self.straight
     }
 
     /// Move the stroke being drawn: a freehand path gains a point, a line or
@@ -138,17 +219,30 @@ impl Document {
             return;
         };
         match &mut stroke.shape {
+            // A straightened stroke keeps its start and moves its end.
+            Shape::Path(points) if self.straight => {
+                if let Some(end) = points.last_mut() {
+                    *end = at;
+                }
+            }
             Shape::Path(points) => {
                 if points.len() < MAX_STROKE_POINTS && points.last() != Some(&at) {
                     points.push(at);
                 }
             }
-            Shape::Arrow { end, .. } | Shape::Rect { end, .. } => *end = at,
+            // A circle stays a circle: its box grows by the larger of the two sides.
+            Shape::Ellipse { start, end } if self.straight => *end = circle_corner(*start, at),
+            Shape::Arrow { end, .. } | Shape::Rect { end, .. } | Shape::Ellipse { end, .. } => {
+                *end = at
+            }
+            // Text is placed by a click, not dragged.
+            Shape::Text { .. } => {}
         }
     }
 
     /// Commit the stroke being drawn, if it is visible.
     pub fn finish(&mut self) {
+        self.straight = false;
         if let Some(stroke) = self.current.take() {
             if stroke.is_visible() {
                 self.strokes.push(stroke);
@@ -160,6 +254,44 @@ impl Document {
         }
     }
 
+    /// Text is being typed into the stroke in progress.
+    pub fn is_typing(&self) -> bool {
+        matches!(
+            self.current,
+            Some(Stroke {
+                shape: Shape::Text { .. },
+                ..
+            })
+        )
+    }
+
+    /// Type into the text being written. Control characters are not text.
+    pub fn type_text(&mut self, typed: &str) {
+        if let Some(Stroke {
+            shape: Shape::Text { text, .. },
+            ..
+        }) = self.current.as_mut()
+        {
+            text.extend(typed.chars().filter(|c| !c.is_control()));
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if let Some(Stroke {
+            shape: Shape::Text { text, .. },
+            ..
+        }) = self.current.as_mut()
+        {
+            text.pop();
+        }
+    }
+
+    /// Drop the stroke in progress without keeping it.
+    pub fn cancel(&mut self) {
+        self.current = None;
+        self.straight = false;
+    }
+
     pub fn is_drawing(&self) -> bool {
         self.current.is_some()
     }
@@ -167,6 +299,7 @@ impl Document {
     /// Remove the last committed stroke. Returns whether there was one.
     pub fn undo(&mut self) -> bool {
         self.current = None;
+        self.straight = false;
         self.strokes.pop().is_some()
     }
 
@@ -177,6 +310,46 @@ impl Document {
     /// Everything to draw, the stroke in progress last.
     pub fn all(&self) -> impl Iterator<Item = &Stroke> {
         self.strokes.iter().chain(self.current.iter())
+    }
+}
+
+/// The corner opposite `start` of the square that holds a circle reaching
+/// towards `at`: the longer side of the dragged box wins, in the direction
+/// the pointer went.
+fn circle_corner(start: Point, at: Point) -> Point {
+    let (dx, dy) = (at.x - start.x, at.y - start.y);
+    let side = dx.abs().max(dy.abs());
+    let x_sign = if dx < 0.0 { -1.0 } else { 1.0 };
+    let y_sign = if dy < 0.0 { -1.0 } else { 1.0 };
+    Point::new(start.x + x_sign * side, start.y + y_sign * side)
+}
+
+/// Whether the pointer has been held still while drawing. Time comes in from
+/// outside, so the rule is tested without a clock.
+#[derive(Debug, Default)]
+pub struct Hold {
+    at: Option<(Point, std::time::Instant)>,
+}
+
+impl Hold {
+    /// The pointer is at `at` now. Movement within the jitter radius is not
+    /// movement: a hand holding a mouse still still trembles a pixel or two.
+    pub fn moved(&mut self, at: Point, now: std::time::Instant) {
+        let still = self.at.is_some_and(|(p, _)| {
+            ((p.x - at.x).powi(2) + (p.y - at.y).powi(2)).sqrt() <= crate::config::STRAIGHTEN_JITTER
+        });
+        if !still {
+            self.at = Some((at, now));
+        }
+    }
+
+    pub fn held(&self, now: std::time::Instant) -> bool {
+        self.at
+            .is_some_and(|(_, since)| now.duration_since(since) >= crate::config::STRAIGHTEN_AFTER)
+    }
+
+    pub fn reset(&mut self) {
+        self.at = None;
     }
 }
 
@@ -267,5 +440,144 @@ mod tests {
         assert_eq!(Tool::from_hotkey('a'), Some(Tool::Arrow));
         assert_eq!(Tool::from_hotkey('r'), Some(Tool::Rect));
         assert_eq!(Tool::from_hotkey('x'), None);
+    }
+
+    #[test]
+    fn holding_still_straightens_a_pen_stroke_from_its_start() {
+        let mut d = Document::default();
+        d.begin(Tool::Pen, [1.0, 0.0, 0.0, 1.0], 3.0, Point::new(0.0, 0.0));
+        for (x, y) in [(3.0, 5.0), (8.0, 2.0), (20.0, 10.0)] {
+            d.extend(Point::new(x, y));
+        }
+        assert!(d.straighten());
+        assert!(d.is_straight());
+        assert_eq!(
+            d.all().last().unwrap().shape,
+            Shape::Path(vec![Point::new(0.0, 0.0), Point::new(20.0, 10.0)])
+        );
+        // After that the line's end follows the pointer; it gains no points.
+        d.extend(Point::new(40.0, 0.0));
+        assert_eq!(
+            d.all().last().unwrap().shape,
+            Shape::Path(vec![Point::new(0.0, 0.0), Point::new(40.0, 0.0)])
+        );
+        d.finish();
+        assert_eq!(d.committed().len(), 1);
+        assert!(!d.is_straight());
+    }
+
+    #[test]
+    fn holding_still_makes_an_ellipse_a_circle_that_stays_one() {
+        let mut d = Document::default();
+        d.begin(Tool::Circle, RED, 3.0, Point::new(10.0, 10.0));
+        d.extend(Point::new(40.0, 20.0));
+        assert!(d.straighten());
+        let circle = |end: Point| Shape::Ellipse {
+            start: Point::new(10.0, 10.0),
+            end,
+        };
+        assert_eq!(
+            d.all().last().unwrap().shape,
+            circle(Point::new(40.0, 40.0))
+        );
+        // Dragged up and left, it grows by the longer side, towards the pointer.
+        d.extend(Point::new(5.0, -50.0));
+        assert_eq!(
+            d.all().last().unwrap().shape,
+            circle(Point::new(-50.0, -50.0))
+        );
+        d.finish();
+        assert!(!d.is_straight());
+        d.begin(Tool::Circle, RED, 3.0, Point::new(0.0, 0.0));
+        assert!(!d.straighten(), "a point has no size");
+    }
+
+    #[test]
+    fn only_a_freehand_stroke_that_went_somewhere_is_straightened() {
+        let mut d = Document::default();
+        d.begin(Tool::Pen, [1.0; 4], 3.0, Point::new(5.0, 5.0));
+        assert!(!d.straighten(), "a dot has no direction");
+        d.begin(Tool::Arrow, [1.0; 4], 3.0, Point::new(0.0, 0.0));
+        d.extend(Point::new(9.0, 9.0));
+        assert!(!d.straighten(), "an arrow is straight already");
+        let mut d = Document::default();
+        assert!(!d.straighten(), "nothing is being drawn");
+    }
+
+    #[test]
+    fn a_hold_is_a_second_without_moving_beyond_the_jitter() {
+        let t0 = std::time::Instant::now();
+        let ms = |n: u64| t0 + std::time::Duration::from_millis(n);
+        let mut h = Hold::default();
+        h.moved(Point::new(0.0, 0.0), ms(0));
+        h.moved(Point::new(1.5, 1.0), ms(600)); // a tremble, not a move
+        assert!(!h.held(ms(900)));
+        assert!(h.held(ms(1000)));
+        h.moved(Point::new(10.0, 0.0), ms(1100)); // a real move starts the clock again
+        assert!(!h.held(ms(1500)));
+        assert!(h.held(ms(2100)));
+        h.reset();
+        assert!(!h.held(ms(5000)));
+    }
+
+    #[test]
+    fn a_circle_is_the_ellipse_in_the_dragged_rectangle() {
+        let mut d = Document::default();
+        d.begin(
+            Tool::Circle,
+            [0.0, 0.0, 1.0, 1.0],
+            3.0,
+            Point::new(10.0, 10.0),
+        );
+        d.extend(Point::new(50.0, 30.0));
+        d.finish();
+        assert_eq!(
+            d.committed()[0].shape,
+            Shape::Ellipse {
+                start: Point::new(10.0, 10.0),
+                end: Point::new(50.0, 30.0)
+            }
+        );
+    }
+
+    #[test]
+    fn text_is_typed_corrected_and_committed_and_empty_text_is_not_kept() {
+        let mut d = Document::default();
+        d.begin(Tool::Text, [1.0, 0.0, 0.0, 1.0], 24.0, Point::new(5.0, 5.0));
+        assert!(d.is_typing());
+        d.type_text("Helo");
+        d.backspace();
+        d.type_text("lo!\u{8}");
+        d.extend(Point::new(99.0, 99.0)); // a drag does not move text
+        d.finish();
+        assert!(!d.is_typing());
+        assert_eq!(
+            d.committed()[0].shape,
+            Shape::Text {
+                at: Point::new(5.0, 5.0),
+                text: "Hello!".into(),
+                size: 24.0
+            }
+        );
+        d.begin(Tool::Text, [1.0; 4], 24.0, Point::new(0.0, 0.0));
+        d.type_text("   ");
+        d.finish();
+        assert_eq!(d.committed().len(), 1, "blank text leaves no undo step");
+    }
+
+    #[test]
+    fn cancelling_text_keeps_nothing() {
+        let mut d = Document::default();
+        d.begin(Tool::Text, [1.0; 4], 24.0, Point::new(0.0, 0.0));
+        d.type_text("abc");
+        d.cancel();
+        assert!(!d.is_drawing());
+        assert!(d.committed().is_empty());
+    }
+
+    #[test]
+    fn the_new_tools_have_hotkeys() {
+        assert_eq!(Tool::from_hotkey('c'), Some(Tool::Circle));
+        assert_eq!(Tool::from_hotkey('T'), Some(Tool::Text));
     }
 }

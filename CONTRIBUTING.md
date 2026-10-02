@@ -5,8 +5,8 @@ Thanks for helping improve Snip for COSMIC™ (`cosmic-ext-snip`).
 ## Development Setup
 
 ```bash
-git clone https://github.com/apassert/cosmic-ext-snip.git
-cd cosmic-ext-snip
+git clone https://github.com/apassert/CosmicExtSnip.git
+cd CosmicExtSnip
 ```
 
 Install the libraries libcosmic links against (Pop!_OS / Ubuntu), then build
@@ -22,6 +22,17 @@ just run
 
 ```bash
 RUST_LOG=debug cargo run
+```
+
+## Checking what the window renders
+
+`cosmic-ext-snip some.png` opens an image in the editor without taking a snip.
+With `COSMIC_EXT_SNIP_DUMP=/tmp/window.png` set, the editor saves its own
+rendered frame - alpha included - once it has settled, and exits. That is how
+to check what the app draws, independent of the compositor:
+
+```bash
+COSMIC_SINGLE_INSTANCE=0 COSMIC_EXT_SNIP_DUMP=/tmp/window.png cosmic-ext-snip small.png
 ```
 
 ## Commit Style

@@ -30,13 +30,81 @@ pub fn encode_png(pixmap: &Pixmap) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("could not encode PNG: {e}"))
 }
 
-/// A copy of `base` with every stroke painted on it.
+/// A copy of `base` with every stroke painted on it; text in a sans-serif font.
 pub fn composite<'a>(base: &Pixmap, strokes: impl IntoIterator<Item = &'a Stroke>) -> Pixmap {
+    composite_with_font(base, strokes, None)
+}
+
+/// The same, with text in `family` - the desktop's interface font, so the
+/// export shows what the editor showed.
+pub fn composite_with_font<'a>(
+    base: &Pixmap,
+    strokes: impl IntoIterator<Item = &'a Stroke>,
+    family: Option<&str>,
+) -> Pixmap {
     let mut out = base.clone();
     for stroke in strokes {
-        paint(&mut out, stroke);
+        if let Shape::Text { at, text, size } = &stroke.shape {
+            paint_text(&mut out, *at, text, *size, stroke.rgba, family);
+        } else {
+            paint(&mut out, stroke);
+        }
     }
     out
+}
+
+/// The line height the editor uses too, so text sits in the same place.
+pub const TEXT_LINE_HEIGHT: f32 = 1.25;
+
+/// Loading the system's fonts takes a moment; it is done once.
+fn fonts() -> &'static std::sync::Mutex<(cosmic_text::FontSystem, cosmic_text::SwashCache)> {
+    static FONTS: std::sync::OnceLock<
+        std::sync::Mutex<(cosmic_text::FontSystem, cosmic_text::SwashCache)>,
+    > = std::sync::OnceLock::new();
+    FONTS.get_or_init(|| {
+        std::sync::Mutex::new((
+            cosmic_text::FontSystem::new(),
+            cosmic_text::SwashCache::new(),
+        ))
+    })
+}
+
+/// One line of text, its top-left corner at `at`, shaped and rasterised with
+/// cosmic-text and blended in pixel by pixel.
+fn paint_text(
+    pixmap: &mut Pixmap,
+    at: Point,
+    text: &str,
+    size: f32,
+    rgba: [f32; 4],
+    family: Option<&str>,
+) {
+    use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping};
+    let Ok(mut guard) = fonts().lock() else {
+        return;
+    };
+    let (font_system, cache) = &mut *guard;
+    let mut buffer = Buffer::new(font_system, Metrics::new(size, size * TEXT_LINE_HEIGHT));
+    buffer.set_size(None, None);
+    let attrs = match family {
+        Some(name) => Attrs::new().family(Family::Name(name)),
+        None => Attrs::new().family(Family::SansSerif),
+    };
+    buffer.set_text(text, &attrs, Shaping::Advanced, None);
+    let to8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let color = cosmic_text::Color::rgba(to8(rgba[0]), to8(rgba[1]), to8(rgba[2]), to8(rgba[3]));
+    buffer.draw(font_system, cache, color, |x, y, w, h, c| {
+        if c.a() == 0 {
+            return;
+        }
+        let Some(rect) = Rect::from_xywh(at.x + x as f32, at.y + y as f32, w as f32, h as f32)
+        else {
+            return;
+        };
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(c.r(), c.g(), c.b(), c.a());
+        pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+    });
 }
 
 fn paint(pixmap: &mut Pixmap, stroke: &Stroke) {
@@ -83,6 +151,12 @@ fn outline(shape: &Shape, width: f32) -> Option<tiny_skia::Path> {
             let rect = rect_between(*start, *end)?;
             return Some(PathBuilder::from_rect(rect));
         }
+        Shape::Ellipse { start, end } => {
+            let rect = rect_between(*start, *end)?;
+            return PathBuilder::from_oval(rect);
+        }
+        // Painted by paint_text, not stroked.
+        Shape::Text { .. } => return None,
     }
     pb.finish()
 }
@@ -198,6 +272,57 @@ mod tests {
             decode_png(b"not a png")
                 .unwrap_err()
                 .contains("not a readable PNG")
+        );
+    }
+
+    #[test]
+    fn a_circle_is_an_outline_inside_its_rectangle() {
+        let mut doc = Document::default();
+        doc.begin(Tool::Circle, BLUE, 2.0, Point::new(5.0, 5.0));
+        doc.extend(Point::new(35.0, 35.0));
+        doc.finish();
+        let out = composite(&white(40, 40), doc.committed());
+        let px = |x, y| out.pixel(x, y).unwrap().demultiply();
+        assert!(
+            px(20, 5).blue() > 200 && px(20, 5).red() < 120,
+            "the top of the ring is blue"
+        );
+        assert_eq!(
+            (px(20, 20).red(), px(20, 20).blue()),
+            (255, 255),
+            "the middle is not filled"
+        );
+        assert_eq!(
+            (px(6, 6).red(), px(6, 6).blue()),
+            (255, 255),
+            "the rectangle's corner is outside it"
+        );
+    }
+
+    #[test]
+    fn text_is_drawn_in_its_colour_where_it_was_placed_and_nowhere_else() {
+        let mut doc = Document::default();
+        doc.begin(Tool::Text, RED, 24.0, Point::new(10.0, 10.0));
+        doc.type_text("HH");
+        doc.finish();
+        let out = composite(&white(120, 60), doc.committed());
+        let mut inked = 0;
+        for y in 0..60 {
+            for x in 0..120 {
+                let p = out.pixel(x, y).unwrap().demultiply();
+                if p.green() < 128 {
+                    inked += 1;
+                    assert!(
+                        (10..80).contains(&x) && (10..45).contains(&y),
+                        "ink outside the text box at ({x},{y})"
+                    );
+                    assert!(p.red() > p.green(), "the ink is red at ({x},{y})");
+                }
+            }
+        }
+        assert!(
+            inked > 40,
+            "only {inked} pixels inked: the text was not drawn"
         );
     }
 }

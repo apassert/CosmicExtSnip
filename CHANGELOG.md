@@ -6,7 +6,7 @@ All notable changes to CosmicSnip are documented in this file.
 
 Rewritten in Rust on libcosmic, following cosmic-screenshot's architecture,
 with CosmicSnip's annotation editor after the snip. Renamed to Snip for
-COSMIC™ (`cosmic-ext-snip`, `io.github.apassert.cosmic-ext-snip`): COSMIC is a
+COSMIC™ (`cosmic-ext-snip`, `io.github.apassert.CosmicExtSnip`): COSMIC is a
 System76 trademark, and third-party apps use the `cosmic-ext-` namespace.
 
 ### Fixed

@@ -23,16 +23,27 @@ use cosmic::widget::{self, button, container};
 use cosmic::{Element, Renderer, Theme};
 use tiny_skia::Pixmap;
 
-use crate::annotation::{Document, Point, Shape, Stroke, Tool, arrow_barbs};
+use crate::annotation::{Document, Hold, Point, Shape, Stroke, Tool, arrow_barbs};
 use crate::capture::Grab;
 use crate::prefs::Prefs;
 use crate::{clipboard, config, render};
 
-pub const APP_ID: &str = "io.github.apassert.cosmic-ext-snip";
+pub const APP_ID: &str = "io.github.apassert.CosmicExtSnip";
+
+/// The header's tools need this much width; a narrower snip is centred.
+const TOOLBAR_MIN_WIDTH: f32 = 720.0;
+const MIN_WINDOW_HEIGHT: f32 = 240.0;
+/// libcosmic draws a 1 px border around a window that is not maximised
+/// (view_main: `.padding(if maximized { 0 } else { 1 })`).
+const BORDER: f32 = 1.0;
+/// One 2560x1440 screen, less the panel.
+const MAX_WINDOW: Size = Size::new(2560.0, 1360.0);
 
 pub struct Flags {
     /// Where a copy is left for `main` to serve after the app exits (outside a sandbox).
     pub handoff: clipboard::Handoff,
+    /// An image to annotate instead of taking a snip.
+    pub open: Option<PathBuf>,
 }
 
 impl cosmic::app::CosmicFlags for Flags {
@@ -56,6 +67,17 @@ pub enum Message {
     /// The portal's copy, read through our window; the attempt number.
     ClipboardImage(Option<clipboard::Png>, u8),
     CloseWindow,
+    /// The Text tool: a click places a text cursor there.
+    PlaceText(Point),
+    /// The window manager asks a window of ours to close.
+    CloseRequested(window::Id),
+    /// What the canvas really got on its first frame: the window is then
+    /// corrected by the difference so the snip shows at exactly 1:1.
+    CanvasSize(Size),
+    /// Debug only (COSMIC_EXT_SNIP_DUMP): the window's own rendering, alpha included.
+    Dumped(window::Screenshot),
+    /// While drawing freehand: has the pointer been held still long enough?
+    Tick(std::time::Instant),
     Exit,
     Begin(Point),
     Extend(Point),
@@ -71,12 +93,24 @@ pub struct App {
     capturing: bool,
     /// A sandboxed copy is being held by this process's window clipboard.
     holding_copy: bool,
+    /// The window iced's clipboard is attached to: the first one opened while
+    /// none was attached. While it holds a copy it is never closed.
+    clip_window: Option<window::Id>,
+    /// An editor was open when the snip started: a cancelled selection brings
+    /// the previous snip back instead of ending the app.
+    reopen_on_cancel: bool,
+    /// The editor has been unpinned after its first frame; resizing is the user's.
+    settled: bool,
+    /// Hold-to-straighten: where the pointer last moved, and when.
+    hold: Hold,
     handle: Handle,
     doc: Document,
     tool: Tool,
     color: usize,
     pen_width: f32,
     highlight_width: f32,
+    /// Text height in snip pixels.
+    text_size: f32,
     error: Option<String>,
 }
 
@@ -84,6 +118,7 @@ impl App {
     fn width(&self) -> f32 {
         match self.tool {
             Tool::Highlighter => self.highlight_width,
+            Tool::Text => self.text_size,
             _ => self.pen_width,
         }
     }
@@ -94,6 +129,7 @@ impl App {
             color: self.color,
             pen_width: self.pen_width,
             highlight_width: self.highlight_width,
+            text_size: self.text_size,
         };
         if let Err(e) = prefs.store() {
             log::warn!("{e}");
@@ -106,6 +142,10 @@ impl App {
                 self.highlight_width = (self.highlight_width + 4.0 * delta)
                     .clamp(config::HIGHLIGHT_WIDTH_MIN, config::HIGHLIGHT_WIDTH_MAX);
             }
+            Tool::Text => {
+                self.text_size = (self.text_size + 4.0 * delta)
+                    .clamp(config::TEXT_SIZE_MIN, config::TEXT_SIZE_MAX);
+            }
             _ => {
                 self.pen_width =
                     (self.pen_width + delta).clamp(config::PEN_WIDTH_MIN, config::PEN_WIDTH_MAX);
@@ -115,8 +155,18 @@ impl App {
     }
 
     /// The snip with every committed stroke, at the snip's own resolution.
-    fn export(&self) -> Result<Vec<u8>, String> {
-        render::encode_png(&render::composite(&self.snip, self.doc.committed()))
+    /// Text in the desktop's interface font, the one the editor showed it in.
+    fn export(&mut self) -> Result<Vec<u8>, String> {
+        // Text still being typed is part of what the user sees: keep it.
+        if self.doc.is_typing() {
+            self.doc.finish();
+        }
+        let family = cosmic::config::interface_font().family;
+        render::encode_png(&render::composite_with_font(
+            &self.snip,
+            self.doc.committed(),
+            Some(&family),
+        ))
     }
 
     fn copy_and_exit(&mut self) -> Task<Message> {
@@ -166,9 +216,40 @@ impl App {
     }
 
     fn key(&mut self, event: keyboard::Event) -> Task<Message> {
-        let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
+        let keyboard::Event::KeyPressed {
+            key,
+            modifiers,
+            text,
+            ..
+        } = event
+        else {
             return Task::none();
         };
+        // Typing text: keys are text, not tools. Esc drops it, Enter keeps it,
+        // and a shortcut with Ctrl keeps it and then does what it does.
+        if self.doc.is_typing() {
+            match &key {
+                Key::Named(Named::Escape) => {
+                    self.doc.cancel();
+                    return Task::none();
+                }
+                Key::Named(Named::Enter) => {
+                    self.doc.finish();
+                    return Task::none();
+                }
+                Key::Named(Named::Backspace) => {
+                    self.doc.backspace();
+                    return Task::none();
+                }
+                _ if modifiers.control() => self.doc.finish(),
+                _ => {
+                    if let Some(typed) = text {
+                        self.doc.type_text(&typed);
+                    }
+                    return Task::none();
+                }
+            }
+        }
         if let Key::Named(Named::Escape) = key {
             return self.close_window();
         }
@@ -203,40 +284,96 @@ impl App {
         Task::none()
     }
 
-    /// A new snip: at start, on Ctrl+N, and when the app is launched again. An
-    /// open editor steps aside first so it is not in the picture.
+    /// A new snip: at start, on Ctrl+N, from the New snip button, and when the
+    /// app is launched again. An open editor goes away first so it is not in
+    /// the picture, and a new one opens on the result.
     fn start_capture(&mut self) -> Task<Message> {
         if self.capturing {
             return Task::none();
         }
         self.capturing = true;
-        let open = self.core.main_window_id();
-        let hide = match open {
-            Some(id) => window::minimize(id, true),
-            None => Task::none(),
-        };
+        let away = self.put_editor_away();
+        self.reopen_on_cancel = away.is_some();
+        let wait = away.is_some();
         let capture = cosmic::task::future(async move {
-            if open.is_some() {
+            if wait {
                 // Long enough for the window to be gone before the screen is taken.
                 tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             }
             Message::Captured(crate::capture::request().await)
         });
-        hide.chain(capture)
+        away.unwrap_or_else(Task::none).chain(capture)
     }
 
-    /// Opens the editor window for the current snip, or brings the open one back.
-    fn ensure_window(&mut self) -> Task<Message> {
-        if let Some(id) = self.core.main_window_id() {
-            return window::minimize::<cosmic::Action<Message>>(id, false)
-                .chain(window::gain_focus(id));
+    /// Takes the editor off the screen. Wayland can neither hide a window nor
+    /// bring back a minimised one (winit-wayland: "You can't unminimize the
+    /// window on Wayland"; set_visible: "Not possible on Wayland") - minimising
+    /// it for a new snip left it minimised for good. So the editor is closed,
+    /// and a new one opens later. The one exception is the window holding a
+    /// sandboxed copy: closing it would drop iced's clipboard connection and
+    /// the copy with it, so it is only minimised and stays as it is.
+    fn put_editor_away(&mut self) -> Option<Task<Message>> {
+        let id = self.core.main_window_id()?;
+        self.core.set_main_window_id(None);
+        if self.holding_copy && self.clip_window == Some(id) {
+            return Some(window::minimize(id, true));
         }
+        if self.clip_window == Some(id) {
+            self.clip_window = None;
+        }
+        Some(window::close(id))
+    }
+
+    /// The snip at 1:1 plus the header bar and the window border, never
+    /// narrower than the toolbar and never larger than a screen. Exact at
+    /// creation, because COSMIC keeps a floating window at the size it was
+    /// mapped with: resizing it afterwards from the app changed nothing
+    /// (measured: window::resize, and min = max after mapping, both ignored).
+    fn window_size(&self) -> Size {
+        Size::new(
+            (self.snip.width() as f32 + 2.0 * BORDER).clamp(TOOLBAR_MIN_WIDTH, MAX_WINDOW.width),
+            (self.snip.height() as f32 + header_height() + 2.0 * BORDER)
+                .clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW.height),
+        )
+    }
+
+    /// The editor opened pinned (min = max), so that COSMIC mapped it floating
+    /// even on a tiled workspace: cosmic-comp decides that once, at map time
+    /// (src/shell/mod.rs, map_window -> is_dialog). After its first frame it
+    /// may be resized.
+    fn settle(&mut self, canvas: Size) -> Task<Message> {
+        let Some(id) = self.core.main_window_id() else {
+            return Task::none();
+        };
+        log::debug!(
+            "editor: snip {}x{}, canvas {canvas:?}",
+            self.snip.width(),
+            self.snip.height()
+        );
+        if self.settled {
+            return Task::none();
+        }
+        self.settled = true;
+        window::set_min_size::<cosmic::Action<Message>>(
+            id,
+            Some(Size::new(TOOLBAR_MIN_WIDTH, MIN_WINDOW_HEIGHT)),
+        )
+        .chain(window::set_max_size(id, None))
+    }
+
+    /// Opens a new editor window for the current snip; an open one is focused.
+    fn open_editor(&mut self) -> Task<Message> {
+        if let Some(id) = self.core.main_window_id() {
+            return window::gain_focus(id);
+        }
+        self.settled = false;
+        // Pinned from the first frame (min = max), so the compositor floats it
+        // rather than tiling it: see settle.
         let mut settings = window::Settings {
-            size: Size::new(
-                (self.snip.width() as f32).clamp(560.0, 1600.0),
-                (self.snip.height() as f32 + 56.0).clamp(360.0, 1000.0),
-            ),
-            min_size: Some(Size::new(560.0, 360.0)),
+            size: self.window_size(),
+            min_size: Some(self.window_size()),
+            max_size: Some(self.window_size()),
+            // Resizable once unpinned (fit_to_snip -> unpin).
             resizable: true,
             decorations: false,
             transparent: true,
@@ -246,19 +383,22 @@ impl App {
         settings.platform_specific.application_id = APP_ID.to_string();
         let (id, opened) = window::open(settings);
         self.core.set_main_window_id(Some(id));
+        // iced attaches its clipboard to a window when it opens one and none is
+        // attached (iced_winit lib.rs, Opened -> Clipboard::connect).
+        if self.clip_window.is_none() {
+            self.clip_window = Some(id);
+        }
         opened.discard()
     }
 
-    /// Esc, the close button and a finished save. The process ends with the
-    /// window unless it holds a sandboxed copy, which would end with it.
+    /// Esc, the close button and a finished save. The app ends unless it holds
+    /// a sandboxed copy; then the editor goes away (put_editor_away) and the
+    /// process stays, holding it.
     fn close_window(&mut self) -> Task<Message> {
         if !self.holding_copy {
             return cosmic::iced::exit();
         }
-        match self.core.set_main_window_id(None) {
-            Some(id) => window::close(id),
-            None => Task::none(),
-        }
+        self.put_editor_away().unwrap_or_else(Task::none)
     }
 
     /// The portal left the snip on the clipboard and a sandbox can read it only
@@ -280,6 +420,20 @@ impl App {
         self.doc = Document::default();
         self.error = None;
     }
+}
+
+/// The header bar's height at the user's density: 32 plus libcosmic's padding
+/// (header_bar.rs: compact [3, _, 4, _], otherwise [7, _, 8, _]).
+fn header_height() -> f32 {
+    match cosmic::config::header_size() {
+        cosmic::cosmic_theme::Density::Compact => 39.0,
+        _ => 47.0,
+    }
+}
+
+/// Debug only: where to save the window's own rendering once, then exit.
+fn dump_path() -> Option<PathBuf> {
+    std::env::var_os("COSMIC_EXT_SNIP_DUMP").map(PathBuf::from)
 }
 
 /// The on-screen image: straight RGBA, as the snip's pixels are premultiplied.
@@ -317,15 +471,38 @@ impl cosmic::Application for App {
             handoff: flags.handoff,
             capturing: false,
             holding_copy: false,
+            clip_window: None,
+            reopen_on_cancel: false,
+            settled: false,
+            hold: Hold::default(),
             handle,
             doc: Document::default(),
             tool: Tool::Pen,
             color: prefs.color,
             pen_width: prefs.pen_width,
             highlight_width: prefs.highlight_width,
+            text_size: prefs.text_size,
             error: None,
         };
-        let first = app.start_capture();
+        // The snip runs edge to edge under the header: no padded content box,
+        // so the window can be exactly the snip plus the header.
+        app.core.window.content_container = false;
+        let first = match flags.open {
+            Some(path) => match std::fs::read(&path)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))
+                .and_then(|bytes| render::decode_png(&bytes))
+            {
+                Ok(snip) => {
+                    app.set_snip(snip);
+                    app.open_editor()
+                }
+                Err(e) => {
+                    log::error!("{e}");
+                    cosmic::iced::exit()
+                }
+            },
+            None => app.start_capture(),
+        };
         (app, first)
     }
 
@@ -334,21 +511,56 @@ impl cosmic::Application for App {
         self.start_capture()
     }
 
-    fn on_close_requested(&self, _id: window::Id) -> Option<Message> {
-        Some(Message::CloseWindow)
+    fn on_close_requested(&self, id: window::Id) -> Option<Message> {
+        Some(Message::CloseRequested(id))
     }
 
+    /// The window that holds a copy, when it is not the editor: minimised, and
+    /// if someone restores it, it says what it is for.
+    fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
+        container(widget::text::body(
+            "Snip is keeping your last copy on the clipboard. Close this window to let it go.",
+        ))
+        .center(Length::Fill)
+        .into()
+    }
+
+    /// Esc is handled with the other keys (App::key), where it can tell typed
+    /// text from the editor: handling it here too would close the window the
+    /// moment Esc dropped the text.
     fn on_escape(&mut self) -> Task<Message> {
-        self.close_window()
+        Task::none()
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        keyboard::listen().map(Message::Key)
+        let keys = keyboard::listen().map(Message::Key);
+        // Only while a freehand stroke or an ellipse is being drawn and has not
+        // been straightened (into a line, or a circle) yet.
+        let holdable = matches!(self.tool, Tool::Pen | Tool::Highlighter | Tool::Circle);
+        if holdable && self.doc.is_drawing() && !self.doc.is_straight() {
+            let tick =
+                cosmic::iced::time::every(std::time::Duration::from_millis(100)).map(Message::Tick);
+            return Subscription::batch([keys, tick]);
+        }
+        keys
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Tool(tool) => self.tool = tool,
+            Message::Tool(tool) => {
+                if self.doc.is_typing() {
+                    self.doc.finish();
+                }
+                self.tool = tool;
+            }
+            Message::PlaceText(at) => {
+                // A click elsewhere keeps the text being typed and starts new text.
+                if self.doc.is_typing() {
+                    self.doc.finish();
+                }
+                let rgba = config::PALETTE[self.color].rgba;
+                self.doc.begin(Tool::Text, rgba, self.text_size, at);
+            }
             Message::Color(i) => {
                 self.color = i.min(config::PALETTE.len() - 1);
                 self.remember();
@@ -383,34 +595,39 @@ impl cosmic::Application for App {
             Message::New => return self.start_capture(),
             Message::Captured(result) => {
                 self.capturing = false;
-                let open = self.core.main_window_id().is_some();
+                let reopen = std::mem::take(&mut self.reopen_on_cancel);
                 match result {
                     Ok(Some(Grab::Image(snip))) => {
                         self.set_snip(snip);
-                        return self.ensure_window();
+                        return self.open_editor();
                     }
                     Ok(Some(Grab::OnClipboard)) => {
-                        let window = self.ensure_window();
-                        return window.chain(Self::read_clipboard_image(1));
+                        let editor = self.open_editor();
+                        return editor.chain(Self::read_clipboard_image(1));
                     }
-                    Ok(None) if open => return self.ensure_window(),
-                    Ok(None) => return self.close_window(),
-                    Err(e) => {
-                        log::error!("{e}");
-                        self.error = Some(e);
-                        if !open && !self.holding_copy {
+                    Ok(None) | Err(_) => {
+                        if let Err(e) = result {
+                            log::error!("{e}");
+                            self.error = Some(e);
+                        }
+                        // Cancelled from an open editor: the previous snip comes back.
+                        if reopen {
+                            return self.open_editor();
+                        }
+                        if !self.holding_copy {
                             return cosmic::iced::exit();
                         }
-                        return if open {
-                            self.ensure_window()
-                        } else {
-                            Task::none()
-                        };
                     }
                 }
             }
             Message::ClipboardImage(Some(png), _) => match crate::render::decode_png(&png.0) {
-                Ok(snip) => self.set_snip(snip),
+                Ok(snip) => {
+                    self.set_snip(snip);
+                    // The window opened before the size was known, and COSMIC
+                    // keeps a mapped window's size: open one of the right size.
+                    let away = self.put_editor_away().unwrap_or_else(Task::none);
+                    return away.chain(self.open_editor());
+                }
                 Err(e) => self.error = Some(format!("the copied snip cannot be read: {e}")),
             },
             // The window may not have the keyboard yet; the clipboard is only
@@ -422,29 +639,88 @@ impl cosmic::Application for App {
                 self.error = Some("the snip was copied, but it could not be read back; take it with Enter instead".into());
             }
             Message::CloseWindow => return self.close_window(),
+            Message::CanvasSize(size) => {
+                let fit = self.settle(size);
+                // Debug: once the window has settled, save what it rendered.
+                if let (Some(id), Some(_)) = (self.core.main_window_id(), dump_path()) {
+                    let shot = cosmic::iced::Task::future(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+                    })
+                    .discard()
+                    .chain(window::screenshot(id).map(|s| cosmic::Action::App(Message::Dumped(s))));
+                    return fit.chain(shot);
+                }
+                return fit;
+            }
+            Message::Dumped(shot) => {
+                if let Some(path) = dump_path() {
+                    let written = tiny_skia::Pixmap::from_vec(
+                        shot.rgba.to_vec(),
+                        tiny_skia::IntSize::from_wh(shot.size.width, shot.size.height)
+                            .expect("a window has a size"),
+                    )
+                    .ok_or_else(|| "screenshot is not RGBA of its size".to_string())
+                    .and_then(|p| render::encode_png(&p))
+                    .and_then(|png| std::fs::write(&path, png).map_err(|e| e.to_string()));
+                    log::warn!("dumped the window to {}: {written:?}", path.display());
+                    return cosmic::iced::exit();
+                }
+            }
+            Message::CloseRequested(id) => {
+                if Some(id) == self.core.main_window_id() {
+                    return self.close_window();
+                }
+                if Some(id) == self.clip_window {
+                    // Closed on purpose: the copy goes with it. If an editor is
+                    // open, iced attaches the clipboard to it instead.
+                    self.holding_copy = false;
+                    self.clip_window = self.core.main_window_id();
+                    let close = window::close(id);
+                    if self.clip_window.is_none() {
+                        return close.chain(cosmic::iced::exit());
+                    }
+                    return close;
+                }
+                return window::close(id);
+            }
             Message::Exit => return cosmic::iced::exit(),
             Message::Begin(at) => {
                 let rgba = config::PALETTE[self.color].rgba;
                 self.doc.begin(self.tool, rgba, self.width(), at);
+                self.hold.moved(at, std::time::Instant::now());
             }
-            Message::Extend(at) => self.doc.extend(at),
-            Message::Finish => self.doc.finish(),
+            Message::Extend(at) => {
+                self.doc.extend(at);
+                self.hold.moved(at, std::time::Instant::now());
+            }
+            Message::Finish => {
+                self.doc.finish();
+                self.hold.reset();
+            }
+            Message::Tick(now) => {
+                if self.hold.held(now) {
+                    self.doc.straighten();
+                }
+            }
             Message::Key(event) => return self.key(event),
         }
         Task::none()
     }
 
     fn header_start(&self) -> Vec<Element<'_, Message>> {
-        let mut items: Vec<Element<'_, Message>> = Tool::ALL
-            .iter()
-            .map(|&tool| {
-                button::icon(widget::icon::from_name(tool.icon()))
-                    .selected(tool == self.tool)
-                    .tooltip(format!("{} ({})", tool.label(), tool_hotkey(tool)))
-                    .on_press(Message::Tool(tool))
-                    .into()
-            })
-            .collect();
+        let mut items: Vec<Element<'_, Message>> = vec![
+            button::icon(widget::icon::from_name("list-add-symbolic"))
+                .tooltip("New snip (Ctrl+N)")
+                .on_press(Message::New)
+                .into(),
+        ];
+        items.extend(Tool::ALL.iter().map(|&tool| {
+            button::icon(widget::icon::from_name(tool.icon()))
+                .selected(tool == self.tool)
+                .tooltip(tool.label())
+                .on_press(Message::Tool(tool))
+                .into()
+        }));
         items.push(
             widget::divider::vertical::default()
                 .height(Length::Fixed(24.0))
@@ -471,7 +747,10 @@ impl cosmic::Application for App {
                 .tooltip("Undo (Ctrl+Z)")
                 .on_press_maybe((!self.doc.committed().is_empty()).then_some(Message::Undo))
                 .into(),
-            button::standard("Save").on_press(Message::Save).into(),
+            button::icon(widget::icon::from_name("document-save-symbolic"))
+                .tooltip("Save (Ctrl+S)")
+                .on_press(Message::Save)
+                .into(),
             button::suggested("Copy").on_press(Message::Copy).into(),
         ];
         if let Some(e) = &self.error {
@@ -493,19 +772,23 @@ impl cosmic::Application for App {
         let board = canvas::Canvas::new(Board { app: self })
             .width(Length::Fill)
             .height(Length::Fill);
+        // Opaque behind the snip: the window is transparent (for its rounded
+        // corners), and where it is wider or taller than the snip - a narrow
+        // snip under the toolbar, or a window resized larger - the desktop
+        // would show through.
         container(stack([snip.into(), board.into()]))
             .width(Length::Fill)
             .height(Length::Fill)
+            .class(cosmic::theme::Container::custom(|theme| {
+                // The theme's opaque background, never its blurred translucent one.
+                let mut fill: Color = theme.cosmic().background(false).base.into();
+                fill.a = 1.0;
+                cosmic::widget::container::Style {
+                    background: Some(Background::Color(fill)),
+                    ..Default::default()
+                }
+            }))
             .into()
-    }
-}
-
-fn tool_hotkey(tool: Tool) -> char {
-    match tool {
-        Tool::Pen => 'P',
-        Tool::Highlighter => 'H',
-        Tool::Arrow => 'A',
-        Tool::Rect => 'R',
     }
 }
 
@@ -582,6 +865,8 @@ struct Board<'a> {
 #[derive(Default)]
 struct Pointer {
     drawing: bool,
+    /// The canvas size last reported for this snip, so it is said once.
+    reported: Option<(u32, u32, u32, u32)>,
 }
 
 impl Board<'_> {
@@ -605,6 +890,19 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        if let canvas::Event::Window(window::Event::RedrawRequested(_)) = event {
+            let key = (
+                self.app.snip.width(),
+                self.app.snip.height(),
+                bounds.width.round() as u32,
+                bounds.height.round() as u32,
+            );
+            if state.reported == Some(key) {
+                return None;
+            }
+            state.reported = Some(key);
+            return Some(canvas::Action::publish(Message::CanvasSize(bounds.size())));
+        }
         let canvas::Event::Mouse(event) = event else {
             return None;
         };
@@ -617,6 +915,10 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
             )
         };
         match event {
+            mouse::Event::ButtonPressed(mouse::Button::Left) if self.app.tool == Tool::Text => {
+                let p = cursor.position_in(bounds)?;
+                Some(canvas::Action::publish(Message::PlaceText(at(p))).and_capture())
+            }
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 let p = cursor.position_in(bounds)?;
                 state.drawing = true;
@@ -648,8 +950,10 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
     ) -> Vec<Geometry> {
         let fit = self.fit(bounds);
         let mut frame = Frame::new(renderer, bounds.size());
-        for stroke in self.app.doc.all() {
-            draw_stroke(&mut frame, &fit, stroke);
+        let committed = self.app.doc.committed().len();
+        let typing = self.app.doc.is_typing();
+        for (i, stroke) in self.app.doc.all().enumerate() {
+            draw_stroke(&mut frame, &fit, stroke, typing && i >= committed);
         }
         vec![frame.into_geometry()]
     }
@@ -660,7 +964,9 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if cursor.is_over(bounds) {
+        if cursor.is_over(bounds) && self.app.tool == Tool::Text {
+            mouse::Interaction::Text
+        } else if cursor.is_over(bounds) {
             mouse::Interaction::Crosshair
         } else {
             mouse::Interaction::default()
@@ -668,7 +974,39 @@ impl Program<Message, Theme, Renderer> for Board<'_> {
     }
 }
 
-fn draw_stroke(frame: &mut Frame, fit: &Fit, stroke: &Stroke) {
+fn draw_stroke(frame: &mut Frame, fit: &Fit, stroke: &Stroke, typing: bool) {
+    // A shape with no extent draws nothing, and the renderer logs a warning for
+    // every such path on every frame ("empty paths and horizontal/vertical lines
+    // cannot be filled"): the first point of a stroke, an arrow not yet dragged.
+    let degenerate = match &stroke.shape {
+        Shape::Path(points) => points.windows(2).all(|w| w[0] == w[1]),
+        Shape::Arrow { start, end }
+        | Shape::Rect { start, end }
+        | Shape::Ellipse { start, end } => start == end,
+        Shape::Text { .. } => false,
+    };
+    if degenerate {
+        return;
+    }
+    if let Shape::Text { at, text, size } = &stroke.shape {
+        // The same font and line height the export uses (render.rs), so the
+        // text lands where it was shown. While it is being typed, a cursor.
+        let content = if typing {
+            format!("{text}|")
+        } else {
+            text.clone()
+        };
+        frame.fill_text(canvas::Text {
+            content,
+            position: fit.to_canvas(*at),
+            color: to_color(stroke.rgba),
+            size: cosmic::iced::Pixels(size * fit.scale),
+            line_height: cosmic::iced::widget::text::LineHeight::Relative(render::TEXT_LINE_HEIGHT),
+            font: cosmic::font::default(),
+            ..canvas::Text::default()
+        });
+        return;
+    }
     let style = IStroke::default()
         .with_color(to_color(stroke.rgba))
         .with_width(stroke.width * fit.scale)
@@ -703,6 +1041,18 @@ fn draw_stroke(frame: &mut Frame, fit: &Fit, stroke: &Stroke) {
             b.line_to(IPoint::new(a.x, c.y));
             b.close();
         }
+        Shape::Ellipse { start, end } => {
+            let a = fit.to_canvas(*start);
+            let c = fit.to_canvas(*end);
+            b.ellipse(canvas::path::arc::Elliptical {
+                center: IPoint::new((a.x + c.x) / 2.0, (a.y + c.y) / 2.0),
+                radii: cosmic::iced::Vector::new((c.x - a.x).abs() / 2.0, (c.y - a.y).abs() / 2.0),
+                rotation: cosmic::iced::Radians(0.0),
+                start_angle: cosmic::iced::Radians(0.0),
+                end_angle: cosmic::iced::Radians(std::f32::consts::TAU),
+            });
+        }
+        Shape::Text { .. } => {}
     });
     frame.stroke(&path, style);
 }

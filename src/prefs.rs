@@ -11,6 +11,7 @@ pub struct Prefs {
     pub color: usize,
     pub pen_width: f32,
     pub highlight_width: f32,
+    pub text_size: f32,
 }
 
 impl Default for Prefs {
@@ -19,6 +20,7 @@ impl Default for Prefs {
             color: 0,
             pen_width: config::DEFAULT_PEN_WIDTH,
             highlight_width: config::DEFAULT_HIGHLIGHT_WIDTH,
+            text_size: config::DEFAULT_TEXT_SIZE,
         }
     }
 }
@@ -55,6 +57,13 @@ impl Prefs {
                             w.clamp(config::HIGHLIGHT_WIDTH_MIN, config::HIGHLIGHT_WIDTH_MAX);
                     }
                 }
+                "text_size" => {
+                    if let Ok(w) = value.parse::<f32>()
+                        && w.is_finite()
+                    {
+                        prefs.text_size = w.clamp(config::TEXT_SIZE_MIN, config::TEXT_SIZE_MAX);
+                    }
+                }
                 _ => {}
             }
         }
@@ -63,10 +72,11 @@ impl Prefs {
 
     pub fn format(&self) -> String {
         format!(
-            "color={}\npen_width={}\nhighlight_width={}\n",
+            "color={}\npen_width={}\nhighlight_width={}\ntext_size={}\n",
             config::PALETTE[self.color.min(config::PALETTE.len() - 1)].name,
             self.pen_width,
-            self.highlight_width
+            self.highlight_width,
+            self.text_size
         )
     }
 
@@ -105,6 +115,7 @@ mod tests {
             color: 2,
             pen_width: 7.0,
             highlight_width: 32.0,
+            text_size: 36.0,
         };
         assert_eq!(Prefs::parse(&prefs.format()), prefs);
     }

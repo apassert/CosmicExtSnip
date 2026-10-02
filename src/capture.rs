@@ -76,15 +76,28 @@ pub async fn request() -> Result<Option<Grab>, String> {
     // an immediate read returns whatever was there before - often the previous
     // snip. Remember that, and wait for the clipboard to change.
     let before = if sandboxed { None } else { clipboard_png() };
-    let request = Screenshot::request()
+    // ashpd's send() waits for the answer and parses it, so an answer without
+    // a uri fails here - not at response(), where it was first handled and
+    // never arrived (the desktop run on 2026-09-30 still logged "screenshot
+    // portal request failed: ZBus Error: missing field `uri`").
+    let request = match Screenshot::request()
         .interactive(true)
         .modal(true)
         .send()
         .await
-        .map_err(|e| format!("screenshot portal request failed: {e}"))?;
+    {
+        Ok(request) => request,
+        Err(e) if lost_clipboard_answer(sandboxed, &e.to_string()) => {
+            return Ok(Some(Grab::OnClipboard));
+        }
+        Err(e) => return Err(format!("screenshot portal request failed: {e}")),
+    };
     let response = match request.response() {
         Ok(r) => r,
         Err(cosmic::dialog::ashpd::Error::Response(ResponseError::Cancelled)) => return Ok(None),
+        Err(e) if lost_clipboard_answer(sandboxed, &e.to_string()) => {
+            return Ok(Some(Grab::OnClipboard));
+        }
         Err(e) => return Err(format!("screenshot portal failed: {e}")),
     };
     let bytes = match locate(response.uri().as_str())? {
@@ -95,6 +108,16 @@ pub async fn request() -> Result<Option<Grab>, String> {
         Location::Clipboard => read_fresh_clipboard_png(before.as_deref())?,
     };
     render::decode_png(&bytes).map(|p| Some(Grab::Image(p)))
+}
+
+/// For a sandboxed caller, xdg-desktop-portal hands the result over through the
+/// document portal. `clipboard:///` is not a file it can hand over, so it logs
+/// "Failed to register clipboard:///: Failed to open clipboard:///" and answers
+/// success with no `uri` at all, which ashpd reports as a deserialisation
+/// error - while the COSMIC backend has copied the snip to the clipboard all the
+/// same. Measured on the node's desktop, 2026-09-29, Ctrl+C in the selection.
+pub fn lost_clipboard_answer(sandboxed: bool, error: &str) -> bool {
+    sandboxed && error.contains("missing field `uri`")
 }
 
 /// The `image/png` on the clipboard now, if any.
@@ -156,6 +179,18 @@ mod tests {
         assert!(is_fresh(Some(&old), &[4, 5]));
         assert!(is_fresh(None, &[4, 5]));
         assert!(!is_fresh(None, &[]));
+    }
+
+    #[test]
+    fn a_sandboxed_answer_without_a_uri_means_the_snip_is_on_the_clipboard() {
+        // The exact error ashpd gave for it inside the Flatpak.
+        let seen = "ZBus Error: missing field `uri`";
+        assert!(lost_clipboard_answer(true, seen));
+        assert!(!lost_clipboard_answer(false, seen));
+        assert!(!lost_clipboard_answer(
+            true,
+            "ZBus Error: org.freedesktop.DBus.Error.ServiceUnknown"
+        ));
     }
 
     #[test]
