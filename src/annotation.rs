@@ -57,7 +57,7 @@ impl Tool {
     pub fn icon(self) -> &'static str {
         match self {
             Tool::Pen => "edit-symbolic",
-            Tool::Highlighter => "format-text-highlight-symbolic",
+            Tool::Highlighter => "text-highlight-symbolic",
             Tool::Arrow => "go-next-symbolic",
             Tool::Rect => "checkbox-symbolic",
             Tool::Circle => "radio-symbolic",
