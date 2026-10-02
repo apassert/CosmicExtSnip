@@ -19,7 +19,8 @@
       one the system screenshot tool uses. The editor adds:
     </p>
     <ul>
-      <li>Pen, highlighter, arrow and rectangle tools</li>
+      <li>Pen, highlighter, arrow, rectangle, circle and text tools</li>
+      <li>Hold the pointer still to straighten a stroke or round a circle</li>
       <li>Six colours and adjustable stroke widths, remembered for the next snip</li>
       <li>Undo, and keyboard shortcuts for every tool</li>
       <li>Copy to the clipboard at full resolution, or save as PNG</li>
@@ -32,6 +33,12 @@
   <provides>
     <binary>cosmic-ext-snip</binary>
   </provides>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Annotating a snip with the highlighter, arrow, rectangle, circle, pen and text</caption>
+      <image>https://raw.githubusercontent.com/apassert/CosmicExtSnip/v2.1.0/data/screenshots/editor.png</image>
+    </screenshot>
+  </screenshots>
   <url type="homepage">https://github.com/apassert/CosmicExtSnip</url>
   <url type="bugtracker">https://github.com/apassert/CosmicExtSnip/issues</url>
   <url type="vcs-browser">https://github.com/apassert/CosmicExtSnip</url>
@@ -62,6 +69,18 @@
   </recommends>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.1.0" date="2026-10-02">
+      <description>
+        <ul>
+          <li>Circle and text tools; text uses the selected colour and the desktop's interface font</li>
+          <li>Hold the pointer still while drawing to straighten a stroke or turn an ellipse into a circle</li>
+          <li>A New snip button</li>
+          <li>The editor opens at the size of the snip and can be resized</li>
+          <li>Copying from the selection works inside the Flatpak sandbox</li>
+          <li>The highlighter tool's icon is shown again</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.0.0" date="2026-09-29">
       <description>
         <p>Rewritten in Rust on libcosmic, under a new name and application ID.</p>

@@ -2,6 +2,29 @@
 
 All notable changes to CosmicSnip are documented in this file.
 
+## [2.1.0] - 2026-10-02
+
+### Added
+- **Circle (`C`) and text (`T`) tools.** Text is drawn in the selected colour
+  and COSMIC's interface font, on screen and in the exported PNG; `Enter` or a
+  click elsewhere keeps it, `Esc` drops it.
+- **Hold still to straighten**, as in the Windows Snipping Tool: a pen or
+  highlighter stroke becomes a straight line, an ellipse a perfect circle.
+- **A New snip button** (and `Ctrl+N`).
+- `cosmic-ext-snip image.png` annotates an existing image.
+
+### Fixed
+- The editor opens at the size of the snip, floats instead of filling a tile,
+  and can be resized; the area around a small snip is opaque.
+- In the Flatpak sandbox, `Ctrl+C` in the selection, and a second copy, work.
+- New snip no longer leaves the editor minimised.
+- The highlighter's toolbar icon was missing (`format-text-highlight-symbolic`
+  is not in the COSMIC icon theme; it is `text-highlight-symbolic`).
+
+### Changed
+- The application ID has no dash (`io.github.apassert.CosmicExtSnip`), which
+  libcosmic's single instance needs.
+
 ## [2.0.0] - 2026-09-29
 
 Rewritten in Rust on libcosmic, following cosmic-screenshot's architecture,
