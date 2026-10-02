@@ -144,8 +144,9 @@ pub fn arrow_barbs(start: Point, end: Point, width: f32) -> [Point; 2] {
 pub struct Document {
     strokes: Vec<Stroke>,
     current: Option<Stroke>,
-    /// The freehand stroke in progress was straightened: it is now a line whose
-    /// far end follows the pointer.
+    /// The stroke in progress was straightened by holding still: a freehand
+    /// stroke is now a line whose far end follows the pointer, an ellipse is now
+    /// a circle.
     straight: bool,
 }
 
@@ -175,23 +176,34 @@ impl Document {
 
     /// Hold still while drawing freehand, and the stroke becomes a straight line
     /// from where it started to where the pointer is - as the Windows Snipping
-    /// Tool does. Returns whether it changed.
+    /// Tool does. Hold still while drawing an ellipse, and it becomes a circle.
+    /// Returns whether it changed.
     pub fn straighten(&mut self) -> bool {
-        let Some(Stroke {
-            shape: Shape::Path(points),
-            ..
-        }) = self.current.as_mut()
-        else {
+        if self.straight {
+            return false;
+        }
+        let Some(stroke) = self.current.as_mut() else {
             return false;
         };
-        if self.straight || points.len() < 2 {
-            return false;
+        match &mut stroke.shape {
+            Shape::Path(points) => {
+                if points.len() < 2 {
+                    return false;
+                }
+                let (first, last) = (points[0], points[points.len() - 1]);
+                if first == last {
+                    return false;
+                }
+                *points = vec![first, last];
+            }
+            Shape::Ellipse { start, end } => {
+                if start == end {
+                    return false;
+                }
+                *end = circle_corner(*start, *end);
+            }
+            _ => return false,
         }
-        let (first, last) = (points[0], points[points.len() - 1]);
-        if first == last {
-            return false;
-        }
-        *points = vec![first, last];
         self.straight = true;
         true
     }
@@ -218,6 +230,8 @@ impl Document {
                     points.push(at);
                 }
             }
+            // A circle stays a circle: its box grows by the larger of the two sides.
+            Shape::Ellipse { start, end } if self.straight => *end = circle_corner(*start, at),
             Shape::Arrow { end, .. } | Shape::Rect { end, .. } | Shape::Ellipse { end, .. } => {
                 *end = at
             }
@@ -297,6 +311,17 @@ impl Document {
     pub fn all(&self) -> impl Iterator<Item = &Stroke> {
         self.strokes.iter().chain(self.current.iter())
     }
+}
+
+/// The corner opposite `start` of the square that holds a circle reaching
+/// towards `at`: the longer side of the dragged box wins, in the direction
+/// the pointer went.
+fn circle_corner(start: Point, at: Point) -> Point {
+    let (dx, dy) = (at.x - start.x, at.y - start.y);
+    let side = dx.abs().max(dy.abs());
+    let x_sign = if dx < 0.0 { -1.0 } else { 1.0 };
+    let y_sign = if dy < 0.0 { -1.0 } else { 1.0 };
+    Point::new(start.x + x_sign * side, start.y + y_sign * side)
 }
 
 /// Whether the pointer has been held still while drawing. Time comes in from
@@ -439,6 +464,32 @@ mod tests {
         d.finish();
         assert_eq!(d.committed().len(), 1);
         assert!(!d.is_straight());
+    }
+
+    #[test]
+    fn holding_still_makes_an_ellipse_a_circle_that_stays_one() {
+        let mut d = Document::default();
+        d.begin(Tool::Circle, RED, 3.0, Point::new(10.0, 10.0));
+        d.extend(Point::new(40.0, 20.0));
+        assert!(d.straighten());
+        let circle = |end: Point| Shape::Ellipse {
+            start: Point::new(10.0, 10.0),
+            end,
+        };
+        assert_eq!(
+            d.all().last().unwrap().shape,
+            circle(Point::new(40.0, 40.0))
+        );
+        // Dragged up and left, it grows by the longer side, towards the pointer.
+        d.extend(Point::new(5.0, -50.0));
+        assert_eq!(
+            d.all().last().unwrap().shape,
+            circle(Point::new(-50.0, -50.0))
+        );
+        d.finish();
+        assert!(!d.is_straight());
+        d.begin(Tool::Circle, RED, 3.0, Point::new(0.0, 0.0));
+        assert!(!d.straighten(), "a point has no size");
     }
 
     #[test]

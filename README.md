@@ -42,7 +42,8 @@ other documents. The icon is the original CosmicSnip artwork. Releases before
   drops it, `+` / `-` set the size of the next text
 - Hold the pointer still for a second while drawing with the pen or
   highlighter and the stroke becomes a straight line from where it started;
-  it then follows the pointer until you let go - as in the Windows Snipping Tool
+  it then follows the pointer until you let go - as in the Windows Snipping Tool.
+  Hold still the same way while drawing a circle and it becomes a perfect circle
 - A **New snip** button (and `Ctrl+N`) to select another region
 - `cosmic-ext-snip image.png` annotates an existing image instead of taking a snip
 - 6-colour palette and adjustable stroke width

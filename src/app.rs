@@ -534,9 +534,10 @@ impl cosmic::Application for App {
 
     fn subscription(&self) -> Subscription<Message> {
         let keys = keyboard::listen().map(Message::Key);
-        // Only while a freehand stroke is being drawn and is not straight yet.
-        let freehand = matches!(self.tool, Tool::Pen | Tool::Highlighter);
-        if freehand && self.doc.is_drawing() && !self.doc.is_straight() {
+        // Only while a freehand stroke or an ellipse is being drawn and has not
+        // been straightened (into a line, or a circle) yet.
+        let holdable = matches!(self.tool, Tool::Pen | Tool::Highlighter | Tool::Circle);
+        if holdable && self.doc.is_drawing() && !self.doc.is_straight() {
             let tick =
                 cosmic::iced::time::every(std::time::Duration::from_millis(100)).map(Message::Tick);
             return Subscription::batch([keys, tick]);

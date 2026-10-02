@@ -73,7 +73,8 @@ pub fn save_dir() -> std::path::PathBuf {
 }
 
 /// Holding the pointer still this long while drawing freehand turns the stroke
-/// into a straight line, as the Windows Snipping Tool does.
+/// into a straight line, as the Windows Snipping Tool does; while drawing an
+/// ellipse, into a circle.
 pub const STRAIGHTEN_AFTER: std::time::Duration = std::time::Duration::from_millis(1000);
 /// Movement within this many snip pixels still counts as holding still.
 pub const STRAIGHTEN_JITTER: f32 = 3.0;
