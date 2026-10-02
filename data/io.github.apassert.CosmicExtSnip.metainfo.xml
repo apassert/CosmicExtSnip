@@ -4,7 +4,7 @@
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
   <name>Snip for COSMIC™</name>
-  <summary>Snip a region of the screen and annotate it</summary>
+  <summary>Take a screenshot of a region and annotate it</summary>
   <developer id="io.github.apassert">
     <name>apassert</name>
   </developer>
@@ -31,6 +31,7 @@
   </description>
   <launchable type="desktop-id">io.github.apassert.CosmicExtSnip.desktop</launchable>
   <provides>
+    <id>com.system76.CosmicApplication</id>
     <binary>cosmic-ext-snip</binary>
   </provides>
   <screenshots>
@@ -56,6 +57,7 @@
   </keywords>
   <categories>
     <category>Graphics</category>
+    <category>Utility</category>
   </categories>
   <supports>
     <control>pointing</control>
