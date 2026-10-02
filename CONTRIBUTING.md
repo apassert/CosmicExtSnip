@@ -71,6 +71,24 @@ window need a real session, so also smoke-test on COSMIC Wayland:
 5. Verify `Esc` in the portal and in the editor exits cleanly, and `Ctrl+N`.
 6. Paste after the window has closed: the copy must still be there.
 
+## Releasing
+
+1. Set the version in `Cargo.toml` (and `cargo build` to update `Cargo.lock`),
+   add a `<release>` entry at the top of the metainfo's `<releases>`, and a
+   `## [x.y.z]` section to `CHANGELOG.md`. `scripts/release-check.sh` says
+   whether they agree; the release workflow runs it too.
+2. Merge that to `main`, then tag it: `git tag -a vX.Y.Z -m "..."` and
+   `git push origin vX.Y.Z`.
+3. `.github/workflows/release.yml` checks the tag against the version, runs
+   the tests and clippy, and publishes a GitHub release with the CHANGELOG
+   section as its notes, an x86_64 tarball, and `cargo-sources.json` for the
+   Flathub manifest.
+
+To try the pipeline without releasing: Actions -> Release -> Run workflow,
+with `publish: none` (artifacts only) or `draft` (a draft release; delete it
+afterwards, or the tag's release cannot be created). `runner: self-hosted`
+needs a runner labelled `cosmicsnip-release`.
+
 ## Security Reports
 
 Please do not file public issues for security vulnerabilities.
