@@ -772,9 +772,22 @@ impl cosmic::Application for App {
         let board = canvas::Canvas::new(Board { app: self })
             .width(Length::Fill)
             .height(Length::Fill);
+        // Opaque behind the snip: the window is transparent (for its rounded
+        // corners), and where it is wider or taller than the snip - a narrow
+        // snip under the toolbar, or a window resized larger - the desktop
+        // would show through.
         container(stack([snip.into(), board.into()]))
             .width(Length::Fill)
             .height(Length::Fill)
+            .class(cosmic::theme::Container::custom(|theme| {
+                // The theme's opaque background, never its blurred translucent one.
+                let mut fill: Color = theme.cosmic().background(false).base.into();
+                fill.a = 1.0;
+                cosmic::widget::container::Style {
+                    background: Some(Background::Color(fill)),
+                    ..Default::default()
+                }
+            }))
             .into()
     }
 }
