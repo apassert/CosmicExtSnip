@@ -19,6 +19,11 @@ check:
     cargo test
     cargo clippy --all-targets -- -D warnings
 
+# In a COSMIC session: does a copy outlive the editor? (CONTRIBUTING.md)
+copy-check: build-release
+    cargo build --release --example clipboard_check
+    scripts/copy-check.sh
+
 run *args:
     cargo run --release -- {{args}}
 

@@ -15,6 +15,9 @@ cosmic-text = "0.19"
 dirs = "6"
 jiff = "0.2"
 log = "0.4"
+# memfd_create, for handing a copy to the process that serves it
+# (clipboard.rs); already in the tree.
+rustix = { version = "1", default-features = false, features = ["std", "fs"] }
 env_logger = "0.11"
 tiny-skia = "0.11"
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time"] }

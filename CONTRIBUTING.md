@@ -35,6 +35,17 @@ to check what the app draws, independent of the compositor:
 COSMIC_SINGLE_INSTANCE=0 COSMIC_EXT_SNIP_DUMP=/tmp/window.png cosmic-ext-snip small.png
 ```
 
+## Checking that a copy outlives the editor
+
+With `COSMIC_EXT_SNIP_DUMP_COPY=1` set as well, the editor ends the way
+`Ctrl+C` does instead of just exiting. `just copy-check` uses that: it watches
+the process that holds the copy for 30 seconds and compares the clipboard,
+byte for byte, with the PNG the editor copies. It needs a COSMIC session,
+opens a window for a moment and replaces what is on the clipboard. Run it
+after touching `clipboard.rs`, the end of `main`, or the libcosmic revision:
+the fault it guards against killed that process 4 to 12 seconds after the
+copy, long after a quick paste test had passed.
+
 ## Commit Style
 
 Use Conventional Commits where possible:
@@ -69,7 +80,8 @@ window need a real session, so also smoke-test on COSMIC Wayland:
 3. Confirm editor tools draw correctly (pen/highlighter/arrow/rect).
 4. Verify copy (`Ctrl+C`) and save (`Ctrl+S`) flows.
 5. Verify `Esc` in the portal and in the editor exits cleanly, and `Ctrl+N`.
-6. Paste after the window has closed: the copy must still be there.
+6. Paste after the window has closed: the copy must still be there, and
+   still half a minute later (`just copy-check`).
 
 ## Releasing
 
