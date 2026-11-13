@@ -86,9 +86,10 @@ window need a real session, so also smoke-test on COSMIC Wayland:
 ## Releasing
 
 1. Set the version in `Cargo.toml` (and `cargo build` to update `Cargo.lock`),
-   add a `<release>` entry at the top of the metainfo's `<releases>`, and a
-   `## [x.y.z]` section to `CHANGELOG.md`. `scripts/release-check.sh` says
-   whether they agree; the release workflow runs it too.
+   add a `<release>` entry at the top of the metainfo's `<releases>`, point
+   the metainfo's screenshot link at the new tag (`.../vX.Y.Z/data/...`), and
+   add a `## [x.y.z]` section to `CHANGELOG.md`. `scripts/release-check.sh`
+   says whether they agree; the release workflow runs it too.
 2. Merge that to `main`, then tag it: `git tag -a vX.Y.Z -m "..."` and
    `git push origin vX.Y.Z`.
 3. `.github/workflows/release.yml` checks the tag against the version, runs

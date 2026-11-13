@@ -37,7 +37,7 @@
   <screenshots>
     <screenshot type="default">
       <caption>Annotating a snip with the highlighter, arrow, rectangle, circle, pen and text</caption>
-      <image>https://raw.githubusercontent.com/apassert/CosmicExtSnip/v2.1.0/data/screenshots/editor.png</image>
+      <image>https://raw.githubusercontent.com/apassert/CosmicExtSnip/v2.1.1/data/screenshots/editor.png</image>
     </screenshot>
   </screenshots>
   <url type="homepage">https://github.com/apassert/CosmicExtSnip</url>
@@ -71,6 +71,13 @@
   </recommends>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.1.1" date="2026-11-13">
+      <description>
+        <ul>
+          <li>A copy made in the editor is no longer lost a few seconds later on desktops with libwayland 1.26</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.1.0" date="2026-10-02">
       <description>
         <ul>
