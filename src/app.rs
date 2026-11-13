@@ -40,7 +40,8 @@ const BORDER: f32 = 1.0;
 const MAX_WINDOW: Size = Size::new(2560.0, 1360.0);
 
 pub struct Flags {
-    /// Where a copy is left for `main` to serve after the app exits (outside a sandbox).
+    /// Where a copy is left for `main` to serve after the app exits, when it
+    /// could not be handed to a fresh image of the process (clipboard.rs).
     pub handoff: clipboard::Handoff,
     /// An image to annotate instead of taking a snip.
     pub open: Option<PathBuf>,
@@ -186,6 +187,11 @@ impl App {
                 cosmic::iced::clipboard::write_data::<cosmic::Action<Message>>(clipboard::Png(png));
             return write.chain(self.close_window());
         }
+        // This process becomes the one that serves the copy, here and now: it
+        // must not live on after the app has ended (clipboard.rs). The window
+        // goes with the connection.
+        let failed = clipboard::serve_in_new_image(&png);
+        log::warn!("cannot re-execute to serve the copy ({failed}); serving it from this process");
         if let Ok(mut slot) = self.handoff.lock() {
             *slot = Some(png);
         }
@@ -663,6 +669,11 @@ impl cosmic::Application for App {
                     .and_then(|p| render::encode_png(&p))
                     .and_then(|png| std::fs::write(&path, png).map_err(|e| e.to_string()));
                     log::warn!("dumped the window to {}: {written:?}", path.display());
+                    // Debug: end the way Ctrl+C does, to check that the copy
+                    // outlives the editor (CONTRIBUTING.md).
+                    if std::env::var_os("COSMIC_EXT_SNIP_DUMP_COPY").is_some() {
+                        return self.copy_and_exit();
+                    }
                     return cosmic::iced::exit();
                 }
             }

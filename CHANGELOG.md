@@ -2,6 +2,17 @@
 
 All notable changes to CosmicSnip are documented in this file.
 
+## [2.1.1] - 2026-11-13
+
+### Fixed
+- **A copy made with `Ctrl+C` in the editor was lost a few seconds later** on
+  desktops with libwayland 1.26 (Pop!_OS since November 2026): the process
+  that held it crashed. After the app had ended, a thread of the toolkit freed
+  its Wayland objects on the connection that was already closed. The editor
+  now re-executes itself as a process that only serves the copy, which ends
+  that thread first. The Flatpak was not affected; it keeps the copy in its
+  window.
+
 ## [2.1.0] - 2026-10-02
 
 ### Added

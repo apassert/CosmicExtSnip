@@ -18,7 +18,7 @@ cosmic-ext-snip
   │     keys                   P H A R, + -, Ctrl+Z/C/S/N/Q, Esc
   │
   └─ finish
-        Copy  → render::composite → PNG → hand-off → window closes → main serves it
+        Copy  → render::composite → PNG → the process re-executes itself to serve it
         Save  → portal file chooser → render::composite → write → exit
         Esc   → exit
         Ctrl+N → editor closed → portal again → a new editor window on the result
@@ -55,9 +55,18 @@ On Wayland the process that sets the clipboard must answer every paste, so a
 copy lives exactly as long as the process that made it. How it is kept alive
 depends on where the app runs:
 
-- **Installed on the host:** the editor leaves the PNG in a hand-off slot and
-  the app ends; `main` then serves it with `wl-clipboard-rs` (the data-control
-  protocol) until another client takes the clipboard.
+- **Installed on the host:** the editor puts the PNG in an anonymous in-memory
+  file and the process re-executes itself as `cosmic-ext-snip
+  --serve-clipboard`, which serves it with `wl-clipboard-rs` (the data-control
+  protocol) until another client takes the clipboard. It is the same process
+  ID with a fresh image, and that is the point. The process must not simply go
+  on after the app has ended: iced's Wayland thread borrows winit's display,
+  outlives it, and frees its objects on the closed connection a few seconds
+  later, which libwayland 1.26 answers with a segmentation fault - and the
+  copy went with the process. `exec` ends that thread before it can run. A
+  detached helper would not do either: where the desktop starts the app as a
+  systemd service, the helper is stopped when the main process exits. If the
+  re-execution fails, `main` serves the PNG in the old process, as before.
 - **In a Flatpak sandbox:** COSMIC hides the data-control protocols from
   sandboxed clients, so the only clipboard is the window's own. Ctrl+C writes
   `image/png` through the window. iced ties its clipboard to one window, and

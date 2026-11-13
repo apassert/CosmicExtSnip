@@ -1021,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "cosmic-ext-snip"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "clap",
  "cosmic-text",
@@ -1030,6 +1030,7 @@ dependencies = [
  "jiff",
  "libcosmic",
  "log",
+ "rustix 1.1.4",
  "tiny-skia 0.11.4",
  "tokio",
  "wl-clipboard-rs",

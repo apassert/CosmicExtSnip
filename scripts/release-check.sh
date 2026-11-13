@@ -7,9 +7,11 @@
 # The version lives in four places - Cargo.toml, Cargo.lock, the metainfo's
 # newest <release> and the CHANGELOG - and the store shows the metainfo one,
 # so a tag cut while they disagree publishes a release the store describes
-# wrongly. When run for a tag (GITHUB_REF_TYPE=tag), the tag must be
-# v<version> too. Prints the version; writes the CHANGELOG section for it to
-# notes-file.
+# wrongly. The metainfo's screenshots are fetched from the tag v<version>, so
+# they must name it: a link to another tag shows an old picture, or none if
+# that tag was never pushed. When run for a tag (GITHUB_REF_TYPE=tag), the
+# tag must be v<version> too. Prints the version; writes the CHANGELOG section
+# for it to notes-file.
 set -euo pipefail
 
 notes=${1:-/dev/null}
@@ -29,6 +31,12 @@ meta_date=$(sed -n 's/.*date="\([^"]*\)".*/\1/p' <<<"$newest")
 [ "$meta_version" = "$version" ] || problem "the metainfo's newest release is '$meta_version', Cargo.toml $version"
 today=$(date -u +%F)
 [[ ! "$meta_date" > "$today" ]] || problem "the metainfo dates $version $meta_date, in the future"
+
+shots=$(grep -o '<image>[^<]*</image>' "$metainfo" || true)
+[ -n "$shots" ] || problem "the metainfo has no screenshot"
+while read -r shot; do
+    [ -z "$shot" ] || [[ "$shot" == *"/v$version/"* ]] || problem "a screenshot is not fetched from the tag v$version: $shot"
+done <<<"$shots"
 
 section=$(awk -v v="$version" '
     $0 ~ "^## \\[" v "\\]" { on = 1; next }
